@@ -136,16 +136,60 @@ check "stop_ap(시작 때)는 fix.pid를 남김" '[ -f $T/sa/fix.pid ]'
 (PATH=$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$T/sa sh -c '. '$T'/app/svc/hotspot.sh; stop_all') >/dev/null 2>&1
 check "stop_all(끝낼 때)는 fix.pid를 정리" '[ ! -f $T/sa/fix.pid ]'
 
+# --- 1c. 상태 화면 앱: Report(판단·제보 링크)와 QR 크기, QrCode가 HMG-API 원본과 같은지 ---
+if command -v javac >/dev/null 2>&1; then
+  J=$T/java; mkdir -p $J
+  if javac -nowarn -encoding UTF-8 -d $J $B/nemesis-pkg/app-src/java/korea/projection/app/Report.java \
+       $B/nemesis-pkg/app-src/java/korea/projection/app/QrCode.java $B/tests/ReportTest.java 2>$T/javac.err; then
+    java -cp $J korea.projection.app.ReportTest > $T/java.out 2>&1
+    jr=$?
+    grep -E "^(ok|FAIL)" $T/java.out | sed 's/^/  [Java] /'
+    check "Java 테스트 전부" '[ $jr -eq 0 ]'
+  else
+    cat $T/javac.err; check "Java 컴파일" 'false'
+  fi
+  UP=$B/pr22-rebase/core/app/java/hmgapi/app/QrCode.java
+  if [ -f $UP ]; then
+    check "QrCode.java는 HMG-API 원본과 package 줄만 다름" '[ "$(sed 1,4d $B/nemesis-pkg/app-src/java/korea/projection/app/QrCode.java | sed 1d | md5sum)" = "$(sed 1d $UP | md5sum)" ]'
+  fi
+fi
+
+# --- 1d. 상태 화면 앱 설치: 읽을 수 있는 곳에 복사해 직접 설치, 실패해도 패키지는 그대로 ---
+IA=$T/ia; mkdir -p $IA/bin $IA/w $IA/tmp; echo apk > $IA/src.apk
+cat > $IA/bin/pm <<E
+#!/bin/sh
+echo "pm \$*" >> $IA/calls
+case "\$1" in
+  install) echo "	pkg: \$3"; if [ -f $IA/ok ]; then echo Success; else echo "Failure [INSTALL_FAILED_INVALID_URI]"; fi ;;
+  path) [ -f $IA/ok ] && echo package:/data/app/korea.projection.app-1.apk ;;
+esac
+exit 0
+E
+printf '#!/bin/sh\ncat %s/boot 2>/dev/null || echo 1\n' $IA > $IA/bin/getprop
+printf '#!/bin/sh\necho "setprop $*" >> %s/calls; echo "$2" > %s/boot\n' $IA $IA > $IA/bin/setprop
+chmod +x $IA/bin/*
+ia() { (PATH=$IA/bin:/usr/bin:/bin HOTSPOT_LIB=1 BB=$T/bin/bb W=$IA/w APK_SRC=$IA/src.apk APK_COPY=$IA/tmp/kp.apk sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$IA'/bin:/usr/bin:/bin; install_app; echo "rc=$?"'); }
+out=$(ia)
+check "앱 설치 실패 → 1 돌려주고 기록, boot_completed는 1로 되돌림" 'echo "$out" | grep -q "rc=1" && grep -q "INVALID_URI" $IA/w/app-install.log && [ "$(cat $IA/boot)" = 1 ] && grep -q "setprop sys.boot_completed 0" $IA/calls'
+check "  pm에는 읽을 수 있는 복사본(644)을 줌" 'grep -q "pm install -r $IA/tmp/kp.apk" $IA/calls && [ "$(stat -f %Lp $IA/tmp/kp.apk)" = 644 ]'
+touch $IA/ok; rm -f $IA/calls; out=$(ia)
+check "앱 설치 성공 → 0, 복사본 지움" 'echo "$out" | grep -q "rc=0" && [ ! -f $IA/tmp/kp.apk ]'
+check "  app_installed는 pm path 출력으로 판단" '(PATH=$IA/bin:/usr/bin:/bin HOTSPOT_LIB=1 BB=$T/bin/bb W=$IA/w sh -c ". $T/app/svc/hotspot.sh; export PATH=$IA/bin:/usr/bin:/bin; app_installed")'
+
 # --- 2. status.sh: 리포트, 비밀 미포함, USB 마운트 확인 ---
 fixpath $PKG/bin/status.sh | sed -e "s#/storage/usb0 /storage/usb1#$T/usb0#" \
   -e "s#/proc/mounts#$T/mounts#" -e "s#/data/nemesis/logs/korea.projection/ap.log#$T/logs/ap.log#" > $T/st.sh
+STF=$T/status.txt
 echo "  101 root  hostapd /data/misc/wifi/hostapd-kp.conf" > $T/ps
 : > $T/mounts
-BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
-check "USB가 마운트 안 됐으면 USB에 쓰지 않음" '[ ! -f $T/usb0/korea-projection-report.md ] && grep -q "USB를 꽂고" $T/toast'
+STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "USB가 마운트 안 됐으면 USB에 쓰지 않고 토스트도 없음 (상태는 화면이 보여 줌)" '[ ! -f $T/usb0/korea-projection-report.md ] && [ ! -f $T/toast ]'
 echo "/dev/block/sda1 $T/usb0 vfat rw 0 0" > $T/mounts
-BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
 R=$T/usb0/korea-projection-report.md
+check "상태 화면용 파일: 644, 키 21개" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 21 ]'
+check "  SSID·비밀번호·폰 IP 없음, 길이만" '! grep -q -e "SSID.cX" -e PASS -e HotspotName -e 192.168.43.23 $STF && grep -qx "ssid_len=7" $STF'
+check "  화면 키와 같은 이름 (our_ap, feat_carplay, cp_conn)" 'grep -qx "our_ap=yes" $STF && grep -q "^feat_carplay=" $STF && grep -qx "cp_conn=1" $STF' 
 check "USB에 리포트 저장" '[ -s $R ]'
 check "리포트에 SSID·비밀번호·폰 IP 없음" '! grep -q -e "SSID.cX" -e "PASS" -e HotspotName -e 192.168.43.23 $R'
 check "우리 hostapd 인식" 'grep -q "우리 hostapd: 예" $R'
@@ -190,7 +234,7 @@ check "kp-rollback 파일 → 되돌리기" '[ "$(run)" = B-rollback ]'
 
 # --- 4. kp-update-test.sh: 업데이트 → 삭제 확인 → 다시 설치 ---
 X=$T/up; mkdir -p $X/bin $X/usb/packages $X/d $X/apps $X/perms $X/wd $X/bk
-echo zip > $X/usb/packages/korea.projection.zip
+echo zip > $X/usb/packages/korea.projection.zip; echo prev > $X/usb/packages/korea.projection-prev.zip
 touch $X/perms/com.hkmc.software.connectivity.carplay_wireless.xml $X/perms/com.hkmc.software.connectivity.androidauto_wireless.xml
 echo 1.1 > $X/ver; echo 1 > $X/wifi
 cat > $X/bin/nemesis <<E
@@ -198,7 +242,9 @@ cat > $X/bin/nemesis <<E
 echo "nemesis \$*" >> $X/calls
 case "\$1" in
   pkg-list) echo "usb-handler|USB Handler|1|service|1.16.7|x"; [ -f $X/ver ] && echo "korea.projection|Korea Projection|0|service,application|\$(cat $X/ver)|x" ;;
-  install) [ -f $X/inst_fail ] && exit 1; [ "\$2" = --update ] && [ ! -f $X/ver ] && exit 1; echo 1.3 > $X/ver; mkdir -p $X/bk; [ -f $X/bk/wifi_on ] || cat $X/wifi > $X/bk/wifi_on; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap ;;
+  install) case "\$*" in *prev.zip) echo 1.3 > $X/ver; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap; exit 0 ;; esac
+    # 실제 NEMESIS처럼: 업데이트는 예전 것을 먼저 지우므로, 실패하면 아무것도 남지 않는다
+    [ -f $X/inst_fail ] && { [ "\$2" = --update ] && rm -f $X/ver $X/ap; exit 1; }; [ "\$2" = --update ] && [ ! -f $X/ver ] && exit 1; echo 1.4.1 > $X/ver; mkdir -p $X/bk; [ -f $X/bk/wifi_on ] || cat $X/wifi > $X/bk/wifi_on; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap ;;
   uninstall) rm -f $X/ver; rm -rf $X/apps/korea.projection $X/bk; [ -f $X/leave_wd ] || rm -rf $X/wd; rm -f $X/conf $X/ap ;;
 esac
 exit 0
@@ -210,26 +256,32 @@ echo "  3 1010 wpa_supplicant"
 E
 printf '#!/bin/sh\ncat %s/wifi\n' $X > $X/bin/settings
 for c in hmgapid getprop; do printf '#!/bin/sh\nexit 0\n' > $X/bin/$c; done
-printf '#!/bin/sh\necho feature:com.hkmc.software.connectivity.carplay_wireless\n' > $X/bin/pm
+cat > $X/bin/pm <<E
+#!/bin/sh
+case "\$1" in
+  list) echo feature:com.hkmc.software.connectivity.carplay_wireless ;;
+  path) [ -f $X/ver ] && echo package:/data/app/korea.projection.app-1.apk || exit 1 ;;
+esac
+E
 printf '#!/bin/sh\necho "wlan0 Link encap:Ethernet HWaddr 00:11:22:33:44:55"\necho "  inet addr:192.168.43.1"\n' > $X/bin/ifconfig
 printf '#!/bin/sh\necho "$*" > %s/toast\n' $X > $X/bin/am
 printf '#!/bin/sh\n/bin/sleep 0.01\n' > $X/bin/sleep
 chmod +x $X/bin/*
 sed "s#^export PATH=.*#export PATH=$X/bin:/usr/bin:/bin:/sbin#" $B/scripts/kp-update-test.sh > $X/kp2.sh
 echo "/dev/block/sda1 $X/usb vfat rw 0 0" > $X/mounts
-urun() { (cd $X && MOUNTS=$X/mounts U=$X/usb D=$X/d APPS=$X/apps PERMS=$X/perms CONF=$X/conf WD=$X/wd BK=$X/bk BB=$T/bin/bb timeout 20 sh $X/kp2.sh >/dev/null 2>&1); cat $X/d/step 2>/dev/null || echo none; }
-check "업데이트: 1.3 설치되고 핫스폿 켜짐 → R" '[ "$(urun)" = R ] && grep -q "install --update" $X/calls'
-check "  삭제 직후 확인 6개 통과 → R2 (재시작 안내)" '[ "$(urun)" = R2 ] && [ "$(grep -c "^통과" $X/usb/kp3/R.txt)" = 6 ] && grep -q "껐다 켠 뒤" $X/toast'
-check "  재시작 뒤 확인 + 다시 설치 모두 통과 → DONE" '[ "$(urun)" = DONE ] && ! grep -q "^실패" $X/usb/kp3/R.txt && [ "$(grep -c "^통과" $X/usb/kp3/R.txt)" = 13 ] && grep -q "모두 통과" $X/toast'
+urun() { (cd $X && MOUNTS=$X/mounts U=$X/usb D=$X/d APPS=$X/apps PERMS=$X/perms CONF=$X/conf WD=$X/wd BK=$X/bk BB=$T/bin/bb timeout 60 sh $X/kp2.sh >/dev/null 2>&1); cat $X/d/step 2>/dev/null || echo none; }
+check "업데이트: 1.4.1 설치되고 핫스폿 켜짐 → R" '[ "$(urun)" = R ] && grep -q "install --update" $X/calls'
+check "  삭제 직후 확인 7개 통과 → R2 (재시작 안내)" '[ "$(urun)" = R2 ] && [ "$(grep -c "^통과" $X/usb/kp5/R.txt)" = 7 ] && grep -q "껐다 켠 뒤" $X/toast'
+check "  재시작 뒤 확인 + 다시 설치 모두 통과 → DONE" '[ "$(urun)" = DONE ] && ! grep -q "^실패" $X/usb/kp5/R.txt && [ "$(grep -c "^통과" $X/usb/kp5/R.txt)" = 15 ] && grep -q "모두 통과" $X/toast'
 check "  다시 설치는 헤드유닛에 복사한 zip으로" 'grep -q "^nemesis install $X/d/pkg.zip" $X/calls'
-check "  그다음 꽂기: 로그 수집, MAC 안 남김" '[ "$(urun)" = DONE ] && ls $X/usb/kp3/C-*.txt >/dev/null 2>&1 && ! grep -q HWaddr $X/usb/kp3/C-*.txt'
+check "  그다음 꽂기: 로그 수집, MAC 안 남김" '[ "$(urun)" = DONE ] && ls $X/usb/kp5/C-*.txt >/dev/null 2>&1 && ! grep -q HWaddr $X/usb/kp5/C-*.txt'
 echo R > $X/d/step; touch $X/leave_wd
-check "삭제 뒤 작업 폴더가 남으면 실패로 잡음" '[ "$(urun)" = R2 ] && grep -q "^실패 작업 폴더" $X/usb/kp3/R.txt'
+check "삭제 뒤 작업 폴더가 남으면 실패로 잡음" '[ "$(urun)" = R2 ] && grep -q "^실패 작업 폴더" $X/usb/kp5/R.txt'
 check "  끝에 실패 수를 알림" '[ "$(urun)" = DONE ] && grep -q "실패 1건" $X/toast'
 rm -f $X/leave_wd
 echo R > $X/d/step; mkdir -p $X/bk; echo 1 > $X/bk/wifi_on; echo 0 > $X/wifi
 urun >/dev/null
-check "Wi-Fi 비교는 설치 전 값(\$BK/wifi_on)과 한다" '[ "$(urun)" = DONE ] && grep -q "^실패 Wi-Fi 설정이 설치 전과 같음 (1)" $X/usb/kp3/R.txt'
+check "Wi-Fi 비교는 설치 전 값(\$BK/wifi_on)과 한다" '[ "$(urun)" = DONE ] && grep -q "^실패 Wi-Fi 설정이 설치 전과 같음 (1)" $X/usb/kp5/R.txt'
 echo 1 > $X/wifi
 echo R > $X/d/step; urun >/dev/null; touch $X/inst_fail
 check "다시 설치 실패 → DONE이라 하지 않고 REINSTALL" '[ "$(urun)" = REINSTALL ] && grep -q "확인되지 않았습니다" $X/toast'
@@ -237,6 +289,12 @@ rm -f $X/inst_fail
 check "  다음 꽂기에 다시 설치 → DONE" '[ "$(urun)" = DONE ] && grep -q "다시 설치했습니다" $X/toast'
 rm -f $X/d/step $X/ver $X/calls
 check "업데이트가 비어 있으면(예전 것만 지워짐) 일반 설치로 메꿈 → R" '[ "$(urun)" = R ] && grep -q "^nemesis install $X/usb/packages/korea.projection.zip" $X/calls'
+rm -f $X/d/step $X/calls; echo 1.3 > $X/ver; touch $X/inst_fail
+check "새 버전 설치가 모두 실패하면 이전 버전으로 되돌리고 알림" '[ "$(urun)" = none ] && grep -q "install $X/usb/packages/korea.projection-prev.zip" $X/calls && grep -q "이전 버전(1.3)으로 되돌렸습니다" $X/toast && [ -f $X/ap ]'
+rm -f $X/inst_fail
+rm -f $X/d/step $X/calls; echo 1.4 > $X/ver; touch $X/usb/kp-only-update
+check "kp-only-update: 업데이트만 하고 DONE (삭제 안 함)" '[ "$(urun)" = DONE ] && ! grep -q "uninstall" $X/calls && grep -q "Launch를 눌러" $X/toast'
+rm -f $X/usb/kp-only-update
 rm -f $X/d/step; echo 1.1 > $X/ver; rm -f $X/usb/packages/korea.projection.zip
 check "USB에 zip이 없으면 시작 안 함" '[ "$(urun)" = none ] && grep -q "시작하지 않았습니다" $X/toast'
 

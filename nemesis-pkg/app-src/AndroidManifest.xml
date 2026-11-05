@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="korea.projection.app"
+    android:versionCode="15"
+    android:versionName="1.4.1">
+
+    <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="19" />
+
+    <!-- 이 헤드유닛의 activity manager는 finish()에서도 GET_TASKS를 확인한다 (HMG-API에서 확인된 점) -->
+    <uses-permission android:name="android.permission.GET_TASKS" />
+
+    <application
+        android:label="@string/app_name"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.Holo.NoActionBar">
+        <!-- 런처 아이콘 없음: NEMESIS Manager의 Launch(component)로만 연다 -->
+        <activity
+            android:name=".StatusActivity"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:screenOrientation="landscape" />
+    </application>
+</manifest>

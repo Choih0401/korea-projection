@@ -10,7 +10,7 @@
 
 | 차종 | 내비 소프트웨어 | 상태 |
 |---|---|---|
-| 기아 니로 하이브리드 (2020, DE PE) | `DEPEHEV.KOR.0000.V039.001.260902` | ✅ 확인됨 (무선 카플레이, 계기판 길안내) |
+| 기아 니로 하이브리드 (2020, DE PE) | `DEPEHEV.KOR.0000.V039.001.260902` | ✅ 확인됨 (무선 카플레이, 계기판 길안내, 상태 화면·QR 제보) |
 | 그 밖의 한국 차 | `*.KOR.*` | ⏳ 제보를 기다립니다. 지금은 설치해도 핫스폿을 켜지 않고 대기만 합니다 |
 
 내 차에서 되는지 알려 주시면 지원 목록에 추가합니다. [차량 제보하기](../../issues/new?template=car-report.yml)
@@ -42,10 +42,13 @@ NEMESIS Manager의 Package Store에서도 설치할 수 있습니다(등록 후)
 ## 상태 확인과 제보
 
 NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누르세요.
-- 화면에 핫스폿·DHCP·카플레이 연결 상태가 뜹니다.
-- USB가 꽂혀 있으면 `korea-projection-report.md` 리포트를 저장합니다.
-  - 리포트에는 비밀번호, SSID, 휴대폰 이름, MAC, IP가 들어가지 않습니다. 길이와 예/아니요만 적습니다.
-  - 열어서 확인한 뒤 [차량 제보](../../issues/new?template=car-report.yml)에 첨부해 주세요.
+
+- 내비 화면에 **상태 화면**이 뜹니다.
+  - 맨 위에 한 줄 판정이 색으로 나옵니다(초록: 준비됨/연결됨, 노랑: 확인 필요, 빨강: 문제).
+  - 왼쪽에는 무선 기능, 핫스폿, DHCP, 카플레이 연결 수 같은 상태표가 나옵니다.
+- 오른쪽 **QR을 폰 카메라로 찍으면** 내용이 채워진 [차량 제보](../../issues/new?template=car-report.yml) 양식이 열립니다. 차종과 결과만 고르고 제출하면 됩니다.
+- QR과 리포트에는 비밀번호, SSID, 휴대폰 이름, MAC, IP가 들어가지 않습니다. 길이와 예/아니요만 적습니다.
+- USB가 꽂혀 있으면 자세한 리포트(`korea-projection-report.md`)도 USB에 저장합니다. 지원 목록에 없는 새 차라면 HMG-API Car Report와 함께 첨부해 주세요.
 
 ## 알아 두실 점
 
@@ -69,7 +72,7 @@ HMG-API의 무선 기능 파일은 HMG-API 것이므로 지우지 않습니다.
 
 ## 개발
 
-- 패키지 소스: `nemesis-pkg/korea.projection/`
+- 패키지 소스: `nemesis-pkg/korea.projection/`, 상태 화면 앱: `nemesis-pkg/app-src/` (빌드: `scripts/build-app.sh`, Android SDK build-tools와 android-19 필요)
 - 차에 올리기 전 PC 테스트: `sh tests/stub-test.sh`. 가짜 헤드유닛 환경에서 설치·되돌리기·리포트를 검사합니다.
 - 차 테스트용 USB 스크립트: `scripts/`
 - 규칙:

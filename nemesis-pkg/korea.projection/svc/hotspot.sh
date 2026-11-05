@@ -274,6 +274,44 @@ _fix_perms() {
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
 }
 
+# 상태 화면 앱(korea.projection.app). NEMESIS의 kind=apk 설치를 쓰지 않는다: 2026-11-06 니로에서
+# /data/nemesis/apps/... 의 apk를 pm이 못 읽어 설치가 실패했고(시스템 사용자가 그 폴더를 못 연다),
+# 그 실패가 패키지 설치 전체를 막아 핫스폿까지 없어졌다. 그래서 읽을 수 있는 곳(/data/local/tmp, 644)에
+# 복사해 직접 설치하고, 실패해도 패키지는 그대로 둔다 (HMG-API 앱 설치와 같은 방식).
+APP=${APP:-/data/nemesis/apps/korea.projection}
+APK_SRC=${APK_SRC:-$APP/app/KoreaProjection.apk}
+APK_COPY=${APK_COPY:-/data/local/tmp/korea-projection.apk}
+APP_ID=korea.projection.app
+# KitKat pm은 실패해도 종료 코드 0일 수 있어 출력으로 본다
+app_installed() { pm path $APP_ID 2>/dev/null | $BB grep -q "^package:"; }
+# 결과(Success/Failure 전체 출력)를 $W/app-install.log에 남긴다. 성공 0, 실패 1.
+install_app() {
+  [ -f $APK_SRC ] || { log "상태 화면 앱 파일 없음: $APK_SRC"; return 1; }
+  $BB cp -f $APK_SRC $APK_COPY && $BB chmod 644 $APK_COPY || { log "상태 화면 앱 복사 실패"; return 1; }
+  # 이 헤드유닛은 sys.boot_completed=1일 때 제조사 서명만 받는다: pm 호출 동안만 0으로 둔다
+  _b=$(getprop sys.boot_completed)
+  if [ "$_b" = 1 ]; then
+    # 도중에 이 스크립트가 끝나도 1로 되돌린다 (0으로 남으면 서비스가 부팅 완료를 영원히 기다린다)
+    trap 'setprop sys.boot_completed 1' EXIT TERM INT HUP
+    setprop sys.boot_completed 0
+  fi
+  _r=$(pm install -r $APK_COPY 2>&1)
+  if [ "$_b" = 1 ]; then
+    setprop sys.boot_completed 1
+    trap - EXIT TERM INT HUP
+  fi
+  $BB mkdir -p $W 2>/dev/null
+  echo "$(date '+%m-%d %H:%M:%S') pm install: $_r" >> $W/app-install.log
+  case "$_r" in
+    *Success*) rm -f $APK_COPY; log "상태 화면 앱 설치됨"; return 0 ;;
+    *) log "상태 화면 앱 설치 실패 (핫스폿과는 상관없음): $($BB echo $_r)"; return 1 ;;
+  esac
+}
+remove_app() {
+  pm uninstall $APP_ID >/dev/null 2>&1
+  rm -f $APK_COPY
+}
+
 main() {
   umask 077
   $BB mkdir -p $W

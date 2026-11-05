@@ -10,6 +10,8 @@ HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
 stop_all
 rm -f $CONF
 rm -rf $W
+# 상태 화면용 파일 (bin/status.sh가 $W 밖에 쓴다)
+rm -f /data/local/tmp/korea-projection-status.txt /data/local/tmp/korea-projection-status.txt.tmp
 $BB ifconfig wlan0 0.0.0.0 2>/dev/null
 # 업데이트 중이면(NEMESIS가 새 버전을 staging에 풀어 두고 예전 것의 preuninstall을 부름) Wi-Fi 설정과
 # 백업은 그대로 두고 조용히 끝낸다. HMG-API의 preuninstall과 같은 판단: 부른 명령이 uninstall이 아니고,
@@ -23,6 +25,7 @@ case "$(cat /proc/$PPID/cmdline 2>/dev/null)" in
       exit 0
     fi ;;
 esac
+remove_app
 [ "$(cat $BK/wifi_on 2>/dev/null)" = 0 ] && svc wifi disable
 rm -rf $BK
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE \

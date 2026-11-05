@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# USB 스크립트(NEMESIS.sh, type=execute): korea.projection 1.3으로 업데이트하고, 스토어 제출 조건인
+# USB 스크립트(NEMESIS.sh, type=execute): korea.projection 1.4.1로 업데이트하고, 스토어 제출 조건인
 # "설치 → 사용 → 삭제 → 원래 상태 복구"를 차에서 확인한다. USB를 꽂을 때마다 한 단계씩 진행한다.
-# 단계는 /data/local/tmp/kp-test3/step, 기록은 USB의 kp3/.
-#   (처음) U: 1.3으로 업데이트 → 버전과 핫스폿 확인                    → 카플레이 써 보고 다시 꽂기
+# 단계는 /data/local/tmp/kp-test5/step, 기록은 USB의 kp5/.
+#   (처음) U: 1.4.1로 업데이트 → 버전과 핫스폿 확인                    → 카플레이 써 보고 다시 꽂기
 #   R: 삭제 → 바로 남은 것이 없는지 확인                               → 차를 껐다 켜고 다시 꽂기
 #   R2: 재시작 뒤 일반 Wi-Fi·HMG-API 파일이 원래대로인지 확인 → 다시 설치 → 확인
 #   그 뒤: 로그와 상태 수집
@@ -10,7 +10,7 @@
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin:/data/nemesis/bin
 BB=${BB:-/system/bin/busybox}
 U=${U:-/storage/usb0}
-D=${D:-/data/local/tmp/kp-test3}
+D=${D:-/data/local/tmp/kp-test5}
 # 스크립트도 헤드유닛에 복사해서 거기서 돈다: 도중에 USB가 떨어져도 셸이 스크립트를 계속 읽을 수 있게
 if [ "$KP_FROM_DATA" != 1 ]; then
   export KP_FROM_DATA=1
@@ -20,14 +20,16 @@ APPS=${APPS:-/data/nemesis/apps}
 PERMS=${PERMS:-/system/etc/permissions}
 PKG=korea.projection
 ZIP=$U/packages/$PKG.zip
+# 업데이트가 실패해 아무것도 남지 않으면 되돌릴 이전 버전 (2026-11-06: 1.4 업데이트 실패로 핫스폿이 없어졌다)
+PREV=$U/packages/$PKG-prev.zip
 CONF=${CONF:-/data/misc/wifi/hostapd-kp.conf}
 WD=${WD:-/data/local/tmp/$PKG}
 BK=${BK:-/data/nemesis/backup/$PKG}
 # 기록은 먼저 헤드유닛($D/out)에 쓰고 끝날 때 USB로 복사한다. 11-06 차에서: 패키지 삭제가 Wi-Fi를
 # 껐다 켜는 동안 USB가 잠깐 떨어졌다 다시 붙는 것으로 보이고, 그 뒤 USB에 쓴 기록이 사라졌다.
 O=$D/out
-UO=$U/kp3
-WANT=1.3
+UO=$U/kp5
+WANT=1.4.1
 # USB가 실제로 붙어 있을 때만 복사 (빈 마운트 지점 폴더에 쓰지 않게)
 copy_out() {
   $BB grep -q " $U " ${MOUNTS:-/proc/mounts} 2>/dev/null || return 0
@@ -51,6 +53,8 @@ dhcp_up() { $BB ps | $BB grep -v grep | $BB grep -q "dnsmasq --keep-in-foregroun
 # 목록이 제대로 나오는가 (usb-handler는 항상 있다) — 목록을 못 읽는 것을 "삭제됨"으로 착각하지 않게
 list_ok() { nemesis pkg-list 2>/dev/null | $BB grep -q "^usb-handler|"; }
 listed() { nemesis pkg-list 2>/dev/null | $BB grep -q "^$PKG|"; }
+# KitKat의 pm은 실패해도 종료 코드 0일 수 있어 출력으로 본다
+app_installed() { pm path korea.projection.app 2>/dev/null | $BB grep -q "^package:"; }
 installed_ver() {
   nemesis pkg-list 2>/dev/null | while IFS='|' read -r _id _n _l _t _v _r; do
     [ "$_id" = $PKG ] && echo "$_v"
@@ -76,6 +80,7 @@ res() {
 }
 
 [ -s $ZIP ] || { toast "Korea Projection 테스트: USB에 packages/$PKG.zip이 없어 시작하지 않았습니다."; exit 0; }
+[ -s $PREV ] || { toast "Korea Projection 테스트: USB에 되돌리기용 packages/$PKG-prev.zip이 없어 시작하지 않았습니다."; exit 0; }
 
 STEP=$(cat $D/step 2>/dev/null)
 case "$STEP" in
@@ -92,16 +97,34 @@ case "$STEP" in
       nemesis install $ZIP 2>&1
       sleep 25
     fi
+    if [ -z "$(installed_ver)" ]; then
+      # 그래도 없으면 이전 버전으로 되돌린다: 핫스폿(무선 카플레이)이 없는 상태로 두지 않는다
+      echo "=== 새 버전 설치 실패: 이전 버전으로 되돌림 ==="
+      nemesis install $PREV 2>&1
+      sleep 25
+      echo PREV > $D/restored
+    fi
     state "U: 업데이트 후"
   } > $O/U.txt 2>&1
   v=$(installed_ver)
   if [ "$v" = $WANT ] && ours_up; then
+    # USB에 kp-only-update 파일이 있으면 업데이트만 하고 끝낸다 (삭제·복구 확인은 건너뜀)
+    if [ -f $U/kp-only-update ]; then
+      echo DONE > $D/step
+      toast "Korea Projection $WANT 업데이트 완료. NEMESIS Manager에서 Launch를 눌러 상태 화면과 QR을 확인해 주세요."
+      sync
+      exit 0
+    fi
     echo R > $D/step
-    # 1.2 이하의 preun은 Wi-Fi를 껐다 켜서 블루투스가 재부팅 전까지 안 될 수 있다
-    toast "Korea Projection $WANT 업데이트 완료. 차를 껐다 켠 뒤 무선 카플레이를 써 보고, USB를 다시 꽂으면 삭제·복구 확인을 합니다."
+    toast "Korea Projection $WANT 업데이트 완료. NEMESIS Manager에서 Korea Projection의 Launch를 눌러 상태 화면과 QR을 확인한 뒤 USB를 다시 꽂아 주세요."
   else
     echo "=== 업데이트 확인 실패: 버전 '$v', 핫스폿 $(ours_up && echo 켜짐 || echo 꺼짐) ===" >> $O/U.txt
-    toast "Korea Projection 테스트: 업데이트 확인에 실패했습니다(버전 '$v'). USB를 가져와 주세요."
+    if [ -f $D/restored ]; then
+      rm -f $D/restored
+      toast "Korea Projection: 새 버전 설치에 실패해 이전 버전($v)으로 되돌렸습니다. 무선 카플레이는 그대로 쓰실 수 있습니다. USB를 가져와 주세요."
+    else
+      toast "Korea Projection 테스트: 업데이트 확인에 실패했습니다(버전 '$v'). USB를 가져와 주세요."
+    fi
   fi
   ;;
 R)
@@ -128,6 +151,7 @@ R)
     res "hostapd 설정 파일 지워짐" '[ ! -f $CONF ]'
     res "작업 폴더 지워짐" '[ ! -d $WD ]'
     res "백업 폴더 지워짐" '[ ! -d $BK ]'
+    res "상태 화면 앱 지워짐" '! app_installed'
   } > $O/R.txt 2>&1
   echo R2 > $D/step
   toast "Korea Projection 삭제 확인 1단계 끝. 차를 껐다 켠 뒤(문 열고 닫기) USB를 다시 꽂아 주세요. 그동안 무선 카플레이는 안 됩니다."
@@ -156,6 +180,7 @@ R2)
     state "R2: 다시 설치 후"
     res "다시 설치됨 ($WANT)" '[ "$(installed_ver)" = $WANT ]'
     res "다시 설치 뒤 핫스폿 켜짐" 'ours_up'
+    res "다시 설치 뒤 상태 화면 앱 있음" 'app_installed'
   } >> $O/R.txt 2>&1
   n=0; [ -f $D/fails ] && n=$(( $($BB wc -l < $D/fails) ))
   if [ "$(installed_ver)" = $WANT ] && ours_up; then
@@ -163,7 +188,7 @@ R2)
     if [ "$n" -eq 0 ]; then
       toast "Korea Projection 삭제·복구 확인: 모두 통과. 다시 설치했습니다. 무선 카플레이를 연결해 보세요."
     else
-      toast "Korea Projection 삭제·복구 확인: 실패 ${n}건(kp3/R.txt). 다시 설치는 됐습니다. USB를 가져와 주세요."
+      toast "Korea Projection 삭제·복구 확인: 실패 ${n}건(kp5/R.txt). 다시 설치는 됐습니다. USB를 가져와 주세요."
     fi
   else
     echo REINSTALL > $D/step

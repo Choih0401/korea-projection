@@ -68,6 +68,51 @@ report() {
   echo "_만든 시각 $(date '+%Y-%m-%d %H:%M')_"
 }
 
+# 상태 화면 앱(StatusActivity)이 읽는 key=value 파일. 앱은 root가 아니므로 누구나 읽을 수 있게(644)
+# /data/local/tmp 바로 아래에 둔다. 값은 예/아니요·버전·개수·길이뿐이다 (SSID, 비밀번호, 휴대폰 이름, MAC, IP 없음).
+STATUS=${STATUS:-/data/local/tmp/korea-projection-status.txt}
+yesno() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
+status_kv() {
+  _prod=$(getprop ro.build.product)
+  _feats="$(pm list features 2>/dev/null)
+"
+  _has() { case "$_feats" in *"feature:$1
+"*) echo yes ;; *) echo no ;; esac; }
+  parse_conf $SRC
+  echo "product=$_prod"
+  echo "targetdir=$(getprop ro.mobis.targetdir)"
+  echo "pkgver=$(pver $APP/NEMESIS.data)"
+  case "$_prod" in $CARS) echo "tested=yes" ;; *) echo "tested=no" ;; esac
+  echo "hmgapi="$($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
+  echo "nemesis=$(nemesis version 2>/dev/null)"
+  echo "wp=$(yesno [ -d /data/nemesis/apps/wireless.projection ])"
+  echo "mod=$(yesno [ -d /data/nemesis/apps/hmgapi.wireless-carplay-aa ])"
+  echo "feat_carplay=$(_has com.hkmc.software.connectivity.carplay_wireless)"
+  echo "feat_aa=$(_has com.hkmc.software.connectivity.androidauto_wireless)"
+  echo "feat_wifi=$(_has android.hardware.wifi)"
+  echo "wlan0=$(yesno [ -d /sys/class/net/wlan0 ])"
+  echo "softap_strings=${NS:-0}"
+  echo "ssid_len=${#S2}"
+  echo "pass_len=${#S4}"
+  echo "our_ap=$(yesno running "hostapd $CONF")"
+  echo "our_dhcp=$(yesno running "$DNSMASQ")"
+  echo "other_ap=$(yesno sh -c "$BB ps | $BB grep -v grep | $BB grep -v '$CONF' | $BB grep -q hostapd")"
+  echo "wpa=$(yesno running wpa_supplicant)"
+  echo "cp_conn=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
+  echo "made=$(date '+%Y-%m-%d %H:%M')"
+}
+( umask 022; status_kv > $STATUS.tmp 2>/dev/null && $BB chmod 644 $STATUS.tmp && $BB mv -f $STATUS.tmp $STATUS )
+
+# 상태 화면 앱이 없으면(설치 때 실패) 여기서 다시 설치해 본다. 이어서 NEMESIS가 화면을 연다.
+# 한 부팅에 한 번만 (sys.boot_completed를 바꿀 때마다 init의 부팅 완료 트리거가 다시 돌기 때문)
+if ! app_installed; then
+  _bid=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+  if [ "$(cat $W/app-try 2>/dev/null)" != "$_bid" ]; then
+    echo "$_bid" > $W/app-try
+    install_app >/dev/null 2>&1
+  fi
+fi
+
 R=$W/korea-projection-report.md
 report > $R 2>/dev/null
 $BB chmod 600 $R
@@ -77,14 +122,15 @@ for u in /storage/usb0 /storage/usb1; do
   $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB cp $R $u/korea-projection-report.md 2>/dev/null && sync && where=$u && break
 done
 
+# 상태는 이어서 열리는 화면(StatusActivity)이 보여 준다. 토스트는 USB에 리포트를 저장했을 때만.
+[ -n "$where" ] || exit 0
 a=off; running "hostapd $CONF" && a=on
 d=off; running "$DNSMASQ" && d=on
 c=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")
 # 켜짐/꺼짐
 [ $a = on ] && a=켜짐 || a=꺼짐; [ $d = on ] && d=켜짐 || d=꺼짐
 m="Korea Projection: 핫스폿 $a, DHCP $d, 카플레이 연결 $c개"
-if [ -n "$where" ]; then m="$m. 리포트를 USB에 저장했습니다(korea-projection-report.md)."
-else m="$m. USB를 꽂고 다시 실행하면 리포트를 저장합니다."; fi
+m="$m. 리포트를 USB에 저장했습니다(korea-projection-report.md)."
 echo "$m"
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
   --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
