@@ -18,7 +18,7 @@
 ## 필요한 것
 
 1. **NEMESIS** 1.16 이상
-2. **HMG-API** 1.0.2 이상과 **무선 모드**(`wireless-carplay-aa`), 그리고 그 차의 지도
+2. **HMG-API** 1.0.2 이상
 3. **Korea Projection** (이 패키지)
 
 `wireless.projection` 패키지는 **필요 없습니다.**
