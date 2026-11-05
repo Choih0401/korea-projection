@@ -1,0 +1,82 @@
+name: 차량 제보
+description: 내 차에서 Korea Projection(무선 카플레이)이 되는지 알려 주세요
+title: "차량 제보: "
+labels: ["차량 제보"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제보해 주셔서 감사합니다. 동작이 확인된 차는 지원 목록에 추가합니다.
+
+        **비밀번호, 차대번호(VIN), 전화번호, 휴대폰 이름은 적지 마세요.** 리포트 파일에는 들어 있지 않습니다.
+
+        **리포트 만드는 방법**
+        1. 차를 세운 상태에서 USB를 꽂습니다.
+        2. NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누릅니다.
+        3. "리포트를 USB에 저장했습니다"가 뜨면 USB에 `korea-projection-report.md` 파일이 생깁니다.
+        4. 파일을 열어 내용을 확인한 뒤 아래에 붙여 넣거나 끌어다 놓아 주세요.
+  - type: input
+    id: car
+    attributes:
+      label: 차종과 연식
+      placeholder: "예: 2020 기아 니로 하이브리드"
+    validations:
+      required: true
+  - type: input
+    id: product
+    attributes:
+      label: 내비 소프트웨어 버전
+      description: 리포트의 "펌웨어" 줄, 또는 설정 → 일반 → 소프트웨어 정보
+      placeholder: "예: DEPEHEV.KOR.0000.V039.001.260902"
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: 결과
+      options:
+        - 무선 카플레이가 연결됨
+        - 아이폰에 무선 연결 제안은 뜨지만 연결이 안 됨
+        - 아이폰에 무선 연결 제안이 안 뜸
+        - 패키지가 설치되지 않음
+        - 기타
+    validations:
+      required: true
+  - type: checkboxes
+    id: installed
+    attributes:
+      label: 설치한 것
+      options:
+        - label: NEMESIS
+        - label: HMG-API (버전은 리포트에 나옵니다)
+        - label: HMG-API 무선 모드 (wireless-carplay-aa)
+        - label: wireless.projection
+        - label: Korea Projection
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: 써 본 기능 (해당하는 것만)
+      options:
+        - label: 카카오맵 길안내
+        - label: T맵 길안내
+        - label: 애플 지도 길안내
+        - label: 계기판 길안내(회전 안내) 표시
+        - label: 음악 (멜론, 지니 등)
+        - label: 전화, 시리
+  - type: textarea
+    id: report
+    attributes:
+      label: Korea Projection 리포트
+      description: korea-projection-report.md 내용을 붙여 넣거나 파일을 끌어다 놓아 주세요
+    validations:
+      required: true
+  - type: textarea
+    id: carreport
+    attributes:
+      label: HMG-API Car Report (지원 목록에 없는 차만)
+      description: HMG-API 앱 → Car Report → Make report. USB의 "HMG-API reports" 폴더에 있는 .json 파일을 끌어다 놓아 주세요
+  - type: textarea
+    id: notes
+    attributes:
+      label: 그 밖에 알려 주실 것
+      description: 언제, 어떻게 했는지, 화면에 뜬 메시지 등

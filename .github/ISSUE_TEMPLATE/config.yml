@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: HMG-API Car Report 만드는 방법
+    url: https://github.com/VysseCodes/HMG-API/wiki/Car-Report
+    about: 지원 목록에 없는 새 차는 HMG-API Car Report도 함께 첨부해 주세요.

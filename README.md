@@ -1,0 +1,88 @@
+# Korea Projection
+
+한국 현대·기아 내비(Gen5W 헤드유닛)에서 **무선 카플레이**를 쓸 수 있게 해 주는 NEMESIS 패키지입니다.
+
+한국 내수 펌웨어에서는 HMG-API 무선 모드가 Wi-Fi 핫스폿을 요청해도 순정 핫스폿이 켜지지 않습니다. 이 패키지가 부팅할 때 순정 `hostapd`(핫스폿)와 `dnsmasq`(IP 나눠 주기)를 직접 켜서 아이폰이 무선으로 붙을 수 있게 합니다.
+
+> ⚠️ 차량 소프트웨어를 바꾸는 일입니다. 모든 책임은 차 주인에게 있습니다. 운행 중에는 조작하지 마세요.
+
+## 지원 차량
+
+| 차종 | 내비 소프트웨어 | 상태 |
+|---|---|---|
+| 기아 니로 하이브리드 (2020, DE PE) | `DEPEHEV.KOR.0000.V039.001.260902` | ✅ 확인됨 (무선 카플레이, 계기판 길안내) |
+| 그 밖의 한국 차 | `*.KOR.*` | ⏳ 제보를 기다립니다. 지금은 설치해도 핫스폿을 켜지 않고 대기만 합니다 |
+
+내 차에서 되는지 알려 주시면 지원 목록에 추가합니다. [차량 제보하기](../../issues/new?template=car-report.yml)
+
+## 필요한 것
+
+1. **NEMESIS** 1.16 이상
+2. **HMG-API** 1.0.2 이상과 **무선 모드**(`wireless-carplay-aa`), 그리고 그 차의 지도
+3. **Korea Projection** (이 패키지)
+
+`wireless.projection` 패키지는 **필요 없습니다.**
+- 이미 설치되어 있다면 그대로 두어도 됩니다.
+- 지우면 무선 기능 파일이 함께 지워지는데, Korea Projection 1.2부터는 부팅 때 자동으로 복구합니다. 복구한 뒤 차를 한 번 껐다 켜라는 안내가 뜹니다.
+
+## 설치
+
+1. USB 맨 위에 `NEMESIS.data` 파일을 만듭니다.
+   ```ini
+   [nemesis]
+   type=install
+   path=packages/korea.projection.zip
+   ```
+2. `packages/korea.projection.zip`을 넣습니다(릴리스에서 받기).
+3. 차를 세운 상태에서 USB를 꽂고, 설치할지 물으면 **예**를 누릅니다.
+4. 차를 끄고 문을 열었다 닫은 뒤 다시 켭니다. 아이폰에서 무선 카플레이를 연결합니다.
+
+NEMESIS Manager의 Package Store에서도 설치할 수 있습니다(등록 후).
+
+## 상태 확인과 제보
+
+NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누르세요.
+- 화면에 핫스폿·DHCP·카플레이 연결 상태가 뜹니다.
+- USB가 꽂혀 있으면 `korea-projection-report.md` 리포트를 저장합니다.
+  - 리포트에는 비밀번호, SSID, 휴대폰 이름, MAC, IP가 들어가지 않습니다. 길이와 예/아니요만 적습니다.
+  - 열어서 확인한 뒤 [차량 제보](../../issues/new?template=car-report.yml)에 첨부해 주세요.
+
+## 알아 두실 점
+
+- 핫스폿이 켜져 있는 동안에는 **내비가 휴대폰 핫스폿(일반 Wi-Fi)에 붙을 수 없습니다.** 한 Wi-Fi 칩이 핫스폿 역할을 하기 때문입니다.
+- 계기판 길안내(회전 안내)는 **휴대폰 앱이 회전 정보를 보낼 때만** 나옵니다.
+  - 카카오맵: 동작 확인. 다만 회전 정보가 오지 않은 날이 한 번 있어 확인 중입니다.
+  - T맵: 앱의 전체 → 연구소 → "카플레이 HUD 연동"을 켜야 합니다.
+- 차 설정에서 ADB TCP가 켜져 있으면 HMG-API가 경고를 띄웁니다. 이 패키지는 `192.168.43.x` 대역을 써서 영향이 없었습니다.
+
+## 삭제
+
+NEMESIS Manager → My Packages → Korea Projection → **Uninstall**을 누르면 다음과 같이 정리됩니다.
+- 이 패키지가 켠 핫스폿과 DHCP를 멈춥니다.
+- 설정 파일, 작업 폴더, 백업을 지웁니다.
+- 설치 전에 Wi-Fi가 꺼져 있던 차는 다시 끕니다.
+- 삭제가 끝나면 **차를 한 번 껐다 켜 주세요**(문을 열었다 닫기). 일반 Wi-Fi가 원래대로 돌아옵니다.
+
+HMG-API의 무선 기능 파일은 HMG-API 것이므로 지우지 않습니다.
+
+삭제할 때 Wi-Fi를 껐다 켜지 않는 이유가 있습니다. 니로에서 확인해 보니 Wi-Fi를 껐다 켜면 Wi-Fi·블루투스 모듈이 다시 시작되고, 블루투스 카플레이가 재부팅 전까지 되지 않았습니다(1.2까지의 동작).
+
+## 개발
+
+- 패키지 소스: `nemesis-pkg/korea.projection/`
+- 차에 올리기 전 PC 테스트: `sh tests/stub-test.sh`. 가짜 헤드유닛 환경에서 설치·되돌리기·리포트를 검사합니다.
+- 차 테스트용 USB 스크립트: `scripts/`
+- 규칙:
+  - 사용자 안내는 한국어로 씁니다.
+  - 차 테스트와 배포 전에 코드 리뷰를 합니다.
+  - 실패하면 기존 상태를 유지하고, 항상 되돌릴 방법을 둡니다.
+  - 비밀번호·폰 이름·VIN 같은 개인정보는 기록하지 않습니다.
+
+## 라이선스
+
+[GNU AGPL-3.0](LICENSE). NEMESIS(xwtk)와 HMG-API(VysseCodes)와 같은 라이선스입니다. 이 저장소에는 우리 코드만 들어 있고, 제조사 파일은 넣지 않습니다.
+
+## 감사
+
+- [NEMESIS](https://github.com/xwtk/hmg_nemesis) — xwtk
+- [HMG-API](https://github.com/VysseCodes/HMG-API) — VysseCodes
