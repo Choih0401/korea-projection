@@ -27,15 +27,20 @@
 
 ## 설치
 
-1. USB 맨 위에 `NEMESIS.data` 파일을 만듭니다.
-   ```ini
-   [nemesis]
-   type=install
-   path=packages/korea.projection.zip
+처음이시면 **[설치 가이드](docs/install-guide.md)**를 따라 하세요. 포맷부터 아이폰 연결, 잘 안 될 때까지 한 단계씩 적었습니다.
+
+1. USB를 **FAT32**로 포맷합니다(32GB 이하 권장).
+2. [릴리스](../../releases/latest)에서 **`korea-projection-버전-usb.zip`**을 받습니다. `NEMESIS.data`는 안에 들어 있으니 만들지 않아도 됩니다.
+3. 압축을 풀고, 풀린 폴더 **안에 있는 것**을 USB **맨 위**에 복사합니다.
    ```
-2. `packages/korea.projection.zip`을 넣습니다(릴리스에서 받기).
-3. 차를 세운 상태에서 USB를 꽂고, 설치할지 물으면 **예**를 누릅니다.
-4. 차를 끄고 문을 열었다 닫은 뒤 다시 켭니다. 아이폰에서 무선 카플레이를 연결합니다.
+   USB
+   ├─ NEMESIS.data
+   ├─ README.txt
+   └─ packages
+       └─ korea.projection.zip   ← 이 파일은 압축을 풀지 마세요
+   ```
+4. 내비 화면이 다 뜬 뒤 USB를 꽂고, 설치할지 물으면 **예**를 누릅니다.
+5. USB를 빼고, 차를 끄고 문을 열었다 닫은 뒤 다시 켭니다. 아이폰에서 무선 카플레이를 연결합니다.
 
 NEMESIS Manager의 Package Store에서도 설치할 수 있습니다(등록 후).
 
