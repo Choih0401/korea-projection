@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # NEMESIS Manager > Korea Projection > Launch: 상태 토스트와 차량 제보용 리포트
-# (korea-projection-report.md: USB가 꽂혀 있으면 USB에, 그리고 $W에 저장).
+# (USB가 꽂혀 있으면 USB의 KoreaProjection-report 폴더에 1-report.md, 3-log.txt로, 그리고 $W에 저장).
 # 리포트에는 이름, 버전, 예/아니요, 개수만 넣는다. SSID, 비밀번호, 휴대폰 이름, MAC, IP는
 # 넣지 않는다. 차 주인이 읽어 본 뒤 첨부한다.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
@@ -25,6 +25,34 @@ SYSONE=${SYSONE:-/system/onebin}
 HMGSTOCK=${HMGSTOCK:-/data/hmgapi/stock}
 # NEMESIS.data의 값 하나 (이 헤드유닛에는 sed/cut/tr이 없다)
 pver() { _v=$($BB grep '^package-version=' "$1" 2>/dev/null); echo "${_v#package-version=}"; }
+# USB 제보 폴더 이름. 사용자가 찾기 쉽게 고정한다(안내문과 같아야 한다).
+# 안의 파일: 1-report.md(이 스크립트), 2-car-report.json(carreport.sh), 3-log.txt(이 스크립트)
+RDIR=${RDIR:-KoreaProjection-report}
+APLOG=${APLOG:-/data/nemesis/logs/korea.projection/ap.log}
+# 표준입력의 마지막 $1줄만 내면서 휴대폰 블루투스 주소(MAC)와 IP 주소를 x로 지운다(busybox tail 대신 awk)
+lastmask() {
+  # n = n + 0: 오래된 busybox awk에서 -v 값이 문자열로 비교되지 않게 숫자로 만든다
+  $BB awk -v n="$1" 'BEGIN { n = n + 0 } { a[NR % n] = $0 }
+    END { s = NR > n ? NR - n + 1 : 1
+      for (i = s; i <= NR; i++) { l = a[i % n]
+        gsub(/[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]/, "xx:xx:xx:xx:xx:xx", l)
+        gsub(/[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/, "x.x.x.x", l)
+        gsub(/[Ff][Ee]80:[0-9A-Fa-f:]*/, "fe80:x", l)
+        print l } }'
+}
+# 분석용 로그(3-log.txt): 서비스 로그, 자동 설정 기록, HMG-API 로그.
+# 휴대폰 이름이 들어가는 디버그 로그(cp.log)는 넣지 않는다. Wi-Fi 이름·비밀번호는 원래 어느 로그에도 없다.
+logs() {
+  echo "# Korea Projection 로그 ($(date '+%Y-%m-%d %H:%M'))"
+  echo "제품: $(getprop ro.build.product), 패키지 $(pver $APP/NEMESIS.data)"
+  echo "휴대폰 블루투스 주소와 IP 주소는 x로 지웠습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보가 보이면 그 줄을 지워 주세요."
+  for _f in $APLOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt; do
+    echo; echo "== ${_f##*/}"
+    if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
+  done
+  echo; echo "== HMG-API 로그 (마지막 800줄)"
+  $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | lastmask 800
+}
 
 report() {
   prod=$(getprop ro.build.product)
@@ -39,7 +67,11 @@ report() {
   echo "- targetdir (NEMESIS models): $(getprop ro.mobis.targetdir)"
   echo "- onebin: $(getprop ro.mobis.onebindir)"
   echo "- 이 패키지 버전: $(pver $APP/NEMESIS.data)"
-  case "$prod" in $CARS) echo "- 확인된 차: 예" ;; *) echo "- 확인된 차: 아니요 (서비스가 대기만 함, 확인된 차: $CARS)" ;; esac
+  if car_in "$prod" "$CARS_OK"; then echo "- 확인된 차: 예"
+  elif car_in "$prod" "$CARS_TRY"; then echo "- 확인된 차: 시험 지원 (차에서 아직 확인되지 않음, 결과를 알려 주세요)"
+  elif car_in "$prod" "$CARS_AUTO"; then echo "- 확인된 차: 자동 시험 (이 차용 설정 없이 HMG-API가 차에서 지도를 만들어 시도, 결과를 알려 주세요)"
+    for _f in automap.bad automap.checked automap.foreign; do [ -f $BK/$_f ] && echo "  - 기록: $_f"; done
+  else echo "- 확인된 차: 아니요 (서비스가 대기만 함, 지원 차: $CARS)"; fi
   echo "- NEMESIS: $(nemesis version 2>/dev/null)"
   # 따옴표 없이: 두 줄이 한 줄로 합쳐진다
   echo "- HMG-API:" $($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
@@ -134,7 +166,8 @@ status_kv() {
   echo "product=$_prod"
   echo "targetdir=$(getprop ro.mobis.targetdir)"
   echo "pkgver=$(pver $APP/NEMESIS.data)"
-  case "$_prod" in $CARS) echo "tested=yes" ;; *) echo "tested=no" ;; esac
+  # tested: 서비스가 동작하는 차인가 (앱은 no면 "대기 중"으로 보인다). 시험 지원 차도 yes다.
+  car_in "$_prod" "$CARS" && echo "tested=yes" || echo "tested=no"
   echo "hmgapi="$($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
   echo "nemesis=$(nemesis version 2>/dev/null)"
   echo "wp=$(yesno [ -d /data/nemesis/apps/wireless.projection ])"
@@ -173,10 +206,16 @@ fi
 R=$W/korea-projection-report.md
 report > $R 2>/dev/null
 $BB chmod 600 $R
+G=$W/korea-projection-log.txt
+# 로그 모으기는 몇 초 걸릴 수 있어 USB가 있을 때만 한다
+if usb_in; then logs > $G 2>/dev/null; $BB chmod 600 $G; fi
 where=""
 for u in $USBS; do
   # 마운트 지점 폴더는 USB가 없어도 있을 수 있다: /proc/mounts로 확인
-  $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB cp $R $u/korea-projection-report.md 2>/dev/null && sync && where=$u && break
+  # 제보 자료는 USB의 한 폴더($RDIR)에 정해진 이름으로 둔다: 1-report.md, 2-car-report.json(carreport.sh), 3-log.txt
+  # 예전 Launch의 2-car-report.json은 지운다(새 1·3번과 섞이지 않게. 필요하면 carreport.sh가 새로 만든다)
+  $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB mkdir -p "$u/$RDIR" && $BB rm -f "$u/$RDIR/2-car-report.json" \
+    && $BB cp $R "$u/$RDIR/1-report.md" 2>/dev/null && $BB cp $G "$u/$RDIR/3-log.txt" 2>/dev/null && sync && where=$u && break
 done
 
 # 상태는 이어서 열리는 화면(StatusActivity)이 보여 준다. 토스트는 USB에 리포트를 저장했을 때만.
@@ -187,15 +226,15 @@ c=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")
 # 켜짐/꺼짐
 [ $a = on ] && a=켜짐 || a=꺼짐; [ $d = on ] && d=켜짐 || d=꺼짐
 m="Korea Projection: 핫스팟 $a, DHCP $d, 카플레이 연결 $c개"
-m="$m. 리포트를 USB에 저장했습니다(korea-projection-report.md)."
-# 지원 목록에 없는 차이거나 HMG-API 훅이 켜져 있지 않으면, 새 차 추가에 필요한 HMG-API Car Report도
-# 뒤에서 만들어 USB에 저장한다(1분쯤, 화면은 기다리지 않음). 끝나면 carreport.sh가 토스트로 알린다.
+m="$m. 제보 자료를 USB의 $RDIR 폴더에 저장했습니다."
+# 확인된 차가 아니거나(시험 지원 차 포함) HMG-API 훅이 켜져 있지 않으면, 새 차 추가·결과 분석에 필요한
+# HMG-API Car Report도 뒤에서 만들어 같은 폴더에 저장한다(1분쯤, 화면은 기다리지 않음). 끝나면 carreport.sh가 토스트로 알린다.
 _need=0
-case "$(getprop ro.build.product)" in $CARS) ;; *) _need=1 ;; esac
+car_in "$(getprop ro.build.product)" "$CARS_OK" || _need=1
 _hk=$(hooks_state); [ "${_hk%% *}" = on ] || _need=1
 if [ $_need = 1 ] && command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then
-  W=$W $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
-  m="Korea Projection: 제보 자료를 USB에 저장하는 중입니다(약 1분). '이제 USB를 빼셔도 됩니다'가 뜰 때까지 꽂아 두세요."
+  W=$W RDIR=$RDIR $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
+  m="Korea Projection: 제보 자료를 USB의 $RDIR 폴더에 저장하는 중입니다(약 1분). '이제 USB를 빼셔도 됩니다'가 뜰 때까지 꽂아 두세요."
 fi
 echo "$m"
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \

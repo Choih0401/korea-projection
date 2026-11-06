@@ -48,7 +48,13 @@ if [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && hmgapid ping 
     fi
   else
     echo "무선 모드 지우기 실패"
+    modmsg=" HMG-API 앱에서 무선 모드(Wireless CarPlay + Android Auto)를 지우고 적용해 주세요."
   fi
+elif [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
+  # HMG-API 데몬이 응답하지 않으면 지울 수 없다. NEMESIS가 이 패키지의 백업 폴더($BK)를 지우므로 기록도 사라진다:
+  # 차주에게 직접 지우라고 알린다.
+  echo "HMG-API 데몬 응답 없음: 무선 모드를 지우지 못함"
+  modmsg=" HMG-API 앱에서 무선 모드(Wireless CarPlay + Android Auto)를 지우고 적용해 주세요."
 fi
 [ "$(cat $BK/wifi_on 2>/dev/null)" = 0 ] && svc wifi disable
 rm -rf $BK

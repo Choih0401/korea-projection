@@ -10,13 +10,14 @@ body:
 
         **비밀번호, 차대번호(VIN), 전화번호, 휴대폰 이름은 적지 마세요.** 리포트 파일에는 들어 있지 않습니다.
 
-        **지원 목록에 없는 차라면** [내 차 제보 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md)를 따라 리포트 두 개(Korea Projection 리포트와 HMG-API Car Report)를 함께 첨부해 주세요.
+        처음이면 [내 차 제보 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md)를 천천히 따라 해 주세요.
 
-        **리포트 만드는 방법**
+        **제보 파일 만드는 방법 (Korea Projection 1.5.2 이상)**
         1. 차를 세운 상태에서 USB를 꽂습니다.
         2. NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누릅니다.
-        3. "리포트를 USB에 저장했습니다"가 뜨면 USB에 `korea-projection-report.md` 파일이 생깁니다.
-        4. 파일을 열어 내용을 확인한 뒤 아래에 붙여 넣거나 끌어다 놓아 주세요.
+        3. "이제 USB를 빼셔도 됩니다"가 뜰 때까지 1~2분 기다립니다.
+        4. USB의 **`KoreaProjection-report`** 폴더에 파일 3개가 생깁니다: `1-report.md`, `2-car-report.json`, `3-log.txt`
+        5. 그 폴더를 열고 **모두 선택**(Windows `Ctrl`+`A`, Mac `⌘`+`A`)해서 아래 "제보 파일 3개" 칸에 끌어다 놓아 주세요.
   - type: input
     id: car
     attributes:
@@ -68,15 +69,14 @@ body:
   - type: textarea
     id: report
     attributes:
-      label: Korea Projection 리포트
-      description: korea-projection-report.md 내용을 붙여 넣거나 파일을 끌어다 놓아 주세요
-    validations:
-      required: true
+      label: 상태 요약 (내비 화면의 QR로 열면 자동으로 채워짐)
+      description: 내비 상태 화면의 QR을 폰으로 찍어 이 양식을 열었다면 여기가 이미 채워져 있습니다. 컴퓨터로 열었다면 비워 두셔도 됩니다
   - type: textarea
-    id: carreport
+    id: files
     attributes:
-      label: HMG-API Car Report (지원 목록에 없는 차는 꼭 필요)
-      description: USB를 꽂은 채 HMG-API 앱 → Car Report → Make report. USB의 "HMG-API reports" 폴더에 있는 .json 파일을 끌어다 놓아 주세요. 이 파일로 그 차의 지도를 만듭니다
+      label: 제보 파일 3개
+      description: USB의 KoreaProjection-report 폴더 안 파일 3개(1-report.md, 2-car-report.json, 3-log.txt)를 한꺼번에 끌어다 놓아 주세요. 파일 이름이 이 칸에 나타나면 성공입니다
+      placeholder: 여기에 파일 3개를 끌어다 놓으세요 (폰으로 QR을 찍어 열었다면, 나중에 컴퓨터에서 댓글로 붙여 주셔도 됩니다)
   - type: textarea
     id: notes
     attributes:

@@ -20,12 +20,14 @@ case "\$1" in
   ro.mobis.targetdir) echo /system/onebin/depehev_kr/ ;;
   ro.mobis.onebindir) echo depehev_kr ;;
   sys.boot_completed) echo 1 ;;
+  persist.sys.iap2.wifi) cat $T/iap2 2>/dev/null || echo 0 ;;
   *) echo 0 ;;
 esac
 E
 cat > $T/bin/pm <<E
 #!/bin/sh
 [ -f $T/feat ] && echo feature:com.hkmc.software.connectivity.carplay_wireless
+[ -f $T/hsfeat ] && echo feature:com.hkmc.software.wifihotspot
 echo feature:android.hardware.wifi.direct
 E
 cat > $T/bin/nemesis <<E
@@ -144,6 +146,11 @@ echo "hmgapid \$*" >> $X/calls
 case "\$1 \$2" in
   "ping "*) [ -f $X/down ] && exit 1; exit 0 ;;
   "engine verify-map") [ -f $X/vm_fail ] && { echo "the map doesn't fit"; exit 1; }; echo "map checked"; exit 0 ;;
+  "engine map-car") [ -f $X/mc_fail ] && { echo "error"; exit 1; }
+    [ -f $X/mc_nw ] && { echo "not written: HMG-API has a map for this car (kia/dl3/kor/260101)"; exit 0; }
+    p=\$(cat $T/product 2>/dev/null || echo DEPEHEV.KOR.0000.V039.001.260902); m=\$(echo \$p | awk -F. '{print tolower(\$1)}'); f=\$(echo \$p | awk -F. '{print \$NF}')
+    mkdir -p $X/hd/maps/unknown/\$m/kor/\$f; echo '{"status": "probed"}' > $X/hd/maps/unknown/\$m/kor/\$f/car.json
+    echo "map-car: 342 hook point(s) found"; echo "written: unknown/\$m/kor/\$f (status probed): run hmgapid engine verify-map, then restart, for its hooks"; exit 0 ;;
   "engine install") [ -f $X/inst_fail ] && exit 1; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; exit 0 ;;
   "engine plan") cat $X/plan; exit 0 ;;
   "engine apply") [ -f $X/apply_fail ] && exit 1; exit 0 ;;
@@ -156,7 +163,7 @@ chmod +x $X/bin/hmgapid
 PLAN_OK='change   /system/onebin/depehev_kr/featurexml.cfg [wireless-carplay-aa] -> 2a7c   [restart the head unit]
 setting  prop/persist.sys.iap2.wifi = t [wireless-carplay-aa]
 hook plan: wireless-carplay-aa on'
-asreset() { rm -rf $X/hd $X/bk $X/w $X/calls $X/vm_fail $X/inst_fail $X/apply_fail $X/down $T/toast; mkdir -p $X/hd/maps/kia/ev6 $X/bk $X/w; printf '%s\n' "$PLAN_OK" > $X/plan; }
+asreset() { rm -rf $X/hd $X/bk $X/w $X/calls $X/mc_nw $X/vm_fail $X/inst_fail $X/apply_fail $X/down $T/toast; mkdir -p $X/hd/maps/kia/ev6 $X/bk $X/w; printf '%s\n' "$PLAN_OK" > $X/plan; }
 as() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
 NM=$X/hd/maps/kia/niro/kor/260902
 asreset; as > $X/out
@@ -169,7 +176,7 @@ check "  다시 부팅해도 이미 있으면 아무것도 안 함" '! grep -q -
 rm -rf $X/hd/mods/wireless-carplay-aa; rm -f $X/calls; as > $X/out
 check "차주가 모드를 지운 뒤에는 다시 설치하지 않음 (mod.tried)" '! grep -q "engine install" $X/calls'
 asreset; mkdir -p $NM; echo official > $NM/car.json; as > $X/out
-check "HMG-API에 이 차 지도가 이미 있으면(공식판 등) 덮어쓰지 않음" '[ "$(cat $NM/car.json)" = official ] && ! grep -q verify-map $X/calls && [ ! -f $X/bk/map.ours ]'
+check "HMG-API에 이 차 지도가 이미 있으면(공식판 등) 덮어쓰지 않음 (다른 차 지도만 넣음)" '[ "$(cat $NM/car.json)" = official ] && ! grep -q verify-map $X/calls && ! grep -q "kia/niro" $X/bk/map.ours 2>/dev/null'
 asreset; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; : > $X/hd/mods/wireless-carplay-aa/.disabled; as > $X/out
 check "모드가 이미 있으면(꺼 둔 것 포함) 설치·적용 안 함" '! grep -q "engine install" $X/calls && ! grep -q "engine apply" $X/calls && [ -f $X/hd/mods/wireless-carplay-aa/.disabled ]'
 asreset; printf '%s\n' "$PLAN_OK" "change   /system/app/X.apk [other-mod] -> 1   [restart the app]" > $X/plan; as > $X/out
@@ -188,13 +195,19 @@ asreset; printf '%s\n' "$PLAN_OK" "hooks    wireless-carplay-aa won't load (poin
 check "  'won't load' 줄이 있으면 적용 안 함" '! grep -qx "hmgapid engine apply" $X/calls'
 asreset; touch $X/vm_fail; as > $X/out
 check "지도 확인에 실패하면 무선 모드를 설치·적용하지 않음" '! grep -q "engine install" $X/calls && ! grep -q "engine apply" $X/calls && [ ! -f $X/bk/mod.tried ]'
-check "  지도는 임시 폴더 없이 한 번에 옮겨짐" '[ -f $NM/car.json ] && [ ! -d $X/hd/maps/.kp-tmp ] && [ ! -d $NM.kp-tmp ]'
+check "  확인에 실패한 지도는 다시 빼고(임시 폴더도 없음) map.bad에 폴더와 md5를 남김" '[ ! -d $NM ] && [ ! -d $X/hd/maps/.kp-tmp ] && grep -qx "kia/niro/kor/260902 $(md5 -q $T/app/hmgapi/maps/kia/niro/kor/260902/car.json)" $X/bk/map.bad'
+rm -f $X/vm_fail $X/calls $T/toast; as > $X/out
+check "  다음 부팅: 같은 지도는 다시 넣지 않고, 확인·모드 설치도 안 함, 토스트 없음" '[ ! -d $NM ] && ! grep -q -E "verify-map|engine install" $X/calls && [ ! -f $T/toast ] && grep -q "지도 확인에 실패한 지도" $X/out'
+echo "kia/niro/kor/260902 0123456789abcdef0123456789abcdef" > $X/bk/map.bad; rm -f $X/calls; as > $X/out
+check "  지도가 바뀐 새 버전이면(md5 다름) 다시 넣고 확인" '[ -f $NM/car.json ] && grep -qx "hmgapid engine verify-map" $X/calls && grep -q "engine install" $X/calls'
+asreset; echo "kia/niro/kor/260902 $(md5 -q $T/app/hmgapi/maps/kia/niro/kor/260902/car.json)" > $X/bk/map.bad; mkdir -p $NM; echo official > $NM/car.json; as > $X/out
+check "  실패 기록이 있어도 같은 폴더에 다른 지도(공식판 등)가 생기면 그 지도로 모드 설치" '[ "$(cat $NM/car.json)" = official ] && grep -q "engine install" $X/calls'
 asreset; rm -rf $X/kh; mkdir -p $X/kh; cp -R $T/app/hmgapi/. $X/kh/; mkdir -p $X/kh/maps/hyundai/sonata/kor/260101; echo '{}' > $X/kh/maps/hyundai/sonata/kor/260101/car.json
 (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$X/kh sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out
-check "패키지에 든 차별 지도를 모두 넣고 기록 (지도 확인은 한 번)" '[ -f $NM/car.json ] && [ -f $X/hd/maps/hyundai/sonata/kor/260101/car.json ] && grep -qx "hyundai/sonata/kor/260101" $X/bk/map.ours && [ "$(grep -c verify-map $X/calls)" = 1 ]'
+check "이 차 지도만 넣고 기록 (다른 차·다른 펌웨어 지도는 넣지 않음, 지도 확인은 한 번)" '[ -f $NM/car.json ] && [ ! -d $X/hd/maps/hyundai ] && [ "$(cat $X/bk/map.ours)" = kia/niro/kor/260902 ] && [ "$(grep -c verify-map $X/calls)" = 1 ]'
 asreset; mkdir -p $NM; echo official > $NM/car.json; mkdir -p $X/kh; cp -R $T/app/hmgapi/. $X/kh/; mkdir -p $X/kh/maps/hyundai/sonata/kor/260101; echo '{"products": ["DN8HEV.KOR."]}' > $X/kh/maps/hyundai/sonata/kor/260101/car.json
 (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$X/kh sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out
-check "  다른 차 지도만 넣었으면 지도 확인을 하지 않음 (이 차 지도는 그대로)" '[ -f $X/hd/maps/hyundai/sonata/kor/260101/car.json ] && ! grep -q verify-map $X/calls && [ "$(cat $NM/car.json)" = official ]'
+check "  이 차 지도가 이미 있으면 아무 지도도 넣지 않고 지도 확인 안 함 (이 차 지도는 그대로)" '[ ! -d $X/hd/maps/hyundai ] && ! grep -q verify-map $X/calls && [ "$(cat $NM/car.json)" = official ] && [ ! -f $X/bk/map.ours ]'
 rm -rf $X/kh
 asreset; mkdir -p $X/w; : > $X/w/x; (cd $X/w && PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out
 check "  현재 폴더에 한 글자 파일이 있어도 [wireless-carplay-aa]를 그대로 비교" 'grep -qx "hmgapid engine apply" $X/calls'
@@ -208,6 +221,68 @@ asreset; rm -rf $X/hd/maps; as > $X/out
 check "HMG-API가 없으면(/data/hmgapi/maps 없음) 아무것도 안 함" '[ ! -s $X/calls ] && grep -q "HMG-API가 없음" $X/out'
 asreset; echo DEPEHEV.USA.0000.V039.001.260902 > $T/product; as > $X/out; rm -f $T/product
 check "확인된 차가 아니면 아무것도 안 함" '[ ! -s $X/calls ] && [ ! -d $NM ]'
+# 1.5.2: 쏘나타 하이브리드 DN8(DN822HEV.KOR 260902, 시험 지원)
+SM=$X/hd/maps/hyundai/sonata/kor/260902
+check "패키지의 쏘나타 지도: 파일 12개, 제품 DN822HEV.KOR., 펌웨어 260902" '[ "$(ls $T/app/hmgapi/maps/hyundai/sonata/kor/260902 | wc -l | tr -d " ")" = 12 ] && grep -q "\"DN822HEV.KOR.\"" $T/app/hmgapi/maps/hyundai/sonata/kor/260902/car.json && grep -q "\"firmware\": \"260902\"" $T/app/hmgapi/maps/hyundai/sonata/kor/260902/car.json'
+asreset; echo DN822HEV.KOR.0000.V039.001.260902 > $T/product; as > $X/out; rm -f $T/product
+check "쏘나타(시험 지원): 쏘나타 지도만 넣고 지도 확인 한 번, 무선 모드 설치·적용" 'diff -r $SM $T/app/hmgapi/maps/hyundai/sonata/kor/260902 >/dev/null && [ ! -d $NM ] && [ "$(grep -c verify-map $X/calls)" = 1 ] && grep -q "engine install" $X/calls && grep -qx "hmgapid engine apply" $X/calls && grep -q "설정을 마쳤습니다" $T/toast'
+asreset; mkdir -p $X/hd/maps/unknown/dn822hev/kor/260902; echo own > $X/hd/maps/unknown/dn822hev/kor/260902/car.json
+echo DN822HEV.KOR.0000.V039.001.260902 > $T/product; as > $X/out; rm -f $T/product
+check "  차주가 차에서 만든 지도(unknown/dn822hev)는 그대로 두고 우리 지도를 더해 확인" '[ "$(cat $X/hd/maps/unknown/dn822hev/kor/260902/car.json)" = own ] && [ -f $SM/car.json ] && [ "$(grep -c verify-map $X/calls)" = 1 ]'
+asreset; mkdir -p $X/hd/maps/unknown/dn822hev/kor/260902; echo own > $X/hd/maps/unknown/dn822hev/kor/260902/car.json; touch $X/vm_fail
+echo DN822HEV.KOR.0000.V039.001.260902 > $T/product; as > $X/out; rm -f $T/product
+check "  우리 지도의 확인이 실패하면 우리 지도만 빼고 차주 지도로 다시 확인, 모드 설치 안 함" '[ ! -d $SM ] && [ "$(cat $X/hd/maps/unknown/dn822hev/kor/260902/car.json)" = own ] && [ "$(grep -c verify-map $X/calls)" = 2 ] && ! grep -q "engine install" $X/calls'
+asreset; echo DN822HEV.KOR.0000.V039.001.260101 > $T/product; as > $X/out; rm -f $T/product
+check "  쏘나타라도 펌웨어가 다르면 자동 시험: 우리 쏘나타 지도는 넣지 않고 차에서 지도를 만들어 확인" '[ ! -d $SM ] && grep -qx "hmgapid engine map-car --write" $X/calls && [ -f $X/hd/maps/unknown/dn822hev/kor/260101/car.json ] && [ "$(grep -c verify-map $X/calls)" = 1 ] && grep -q "engine install" $X/calls && grep -q "시험 중인 차" $T/toast'
+# 자동 시험(목록에 없는 한국 차)
+AM=$X/hd/maps/unknown/testx/kor/260101
+asreset; echo TESTX.KOR.0000.V039.001.260101 > $T/product; as > $X/out
+check "자동 시험: 목록에 없는 한국 차는 HMG-API가 차에서 지도를 만들고 확인한 뒤 모드 설치·적용, 시험 토스트" '[ -f $AM/car.json ] && grep -qx "unknown/testx/kor/260101" $X/bk/map.ours && grep -qx "hmgapid engine verify-map" $X/calls && grep -q "engine install" $X/calls && grep -qx "hmgapid engine apply" $X/calls && grep -q "시험 중인 차" $T/toast && [ ! -d $NM ]'
+rm -f $X/calls $T/toast; as > $X/out
+check "  다시 부팅: 지도가 있으면 다시 만들지 않고 다시 확인도 안 함" '! grep -q -E "map-car|verify-map|engine install" $X/calls'
+rm -rf $X/hd/maps/unknown; rm -f $X/calls; as > $X/out
+check "  HMG-API 업데이트로 지도 폴더가 바뀌면 다시 만들고 확인" '[ -f $AM/car.json ] && grep -q "map-car --write" $X/calls && grep -qx "hmgapid engine verify-map" $X/calls'
+asreset; touch $X/vm_fail; as > $X/out
+check "  만든 지도의 확인이 실패하면 그 지도를 지우고 automap.bad, 모드 설치 안 함" '[ ! -d $AM ] && [ -f $X/bk/automap.bad ] && ! grep -q "engine install" $X/calls && grep -q "지도 확인에 실패" $T/toast'
+rm -f $X/vm_fail $X/calls $T/toast; as > $X/out
+check "  다음 부팅: 실패 기록이 있으면 지도도 모드도 다시 하지 않음, 토스트 없음" '! grep -q -E "map-car|verify-map|engine install" $X/calls && [ ! -f $T/toast ]'
+asreset; mkdir -p $X/hd/maps/hyundai/testx/kor/260101; echo own > $X/hd/maps/hyundai/testx/kor/260101/car.json; as > $X/out
+check "  차에 이 차 지도가 이미 있으면(차주·공식판) 만들지 않고 한 번 확인만, 실패해도 지우지 않음" '! grep -q map-car $X/calls && [ "$(grep -c verify-map $X/calls)" = 1 ] && [ -f $X/bk/automap.checked ]'
+asreset; mkdir -p $X/hd/maps/hyundai/testx/kor/260101; echo own > $X/hd/maps/hyundai/testx/kor/260101/car.json; touch $X/vm_fail; as > $X/out
+check "    그 지도의 확인이 실패하면 지우지 않고 automap.bad, 모드 설치 안 함" '[ "$(cat $X/hd/maps/hyundai/testx/kor/260101/car.json)" = own ] && [ -f $X/bk/automap.bad ] && ! grep -q "engine install" $X/calls'
+asreset; touch $X/mc_fail; as > $X/out; rm -f $X/mc_fail
+check "  지도 만들기가 실패하면 모드 설치 안 함, 제보 안내 토스트" '[ -f $X/bk/automap.bad ] && ! grep -q "engine install" $X/calls && grep -q "지도를 만들지 못했습니다" $T/toast'
+asreset; touch $T/hsfeat; as > $X/out; rm -f $T/hsfeat
+check "  순정 핫스팟 기능이 있는 차는 자동 시험 안 함 (지도·모드 모두)" '! grep -q -E "map-car|verify-map|engine install" $X/calls && grep -q "순정 핫스팟 기능" $X/out'
+asreset; mkdir -p $X/wp; (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi WPDIR=$X/wp sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out; rm -rf $X/wp
+check "  wireless.projection이 설치된 차는 자동 시험 안 함" '! grep -q -E "map-car|verify-map|engine install" $X/calls && grep -q "wireless.projection이 설치" $X/out'
+asreset; mkdir -p $X/hd/maps/kia/dl3/kor/260101; echo '{"products": ["TESTX.KOR."]}' > $X/hd/maps/kia/dl3/kor/260101/car.json
+touch $X/mc_nw; as > $X/out; rm -f $X/calls; as > $X/out2; rm -f $X/mc_nw
+check "  다른 폴더 이름의 이 차 지도(공식판)가 있으면 그 지도를 한 번 확인하고 모드 설치, 다음 부팅엔 지도 만들기·확인 안 함" 'grep -q "이미 있음" $X/out && [ -f $X/bk/automap.checked ] && [ -f $X/hd/maps/kia/dl3/kor/260101/car.json ] && ! grep -q -E "verify-map|map-car" $X/calls'
+asreset; echo TESTX.USA.0000.V039.001.260101 > $T/product; as > $X/out
+check "해외 차는 자동 시험도 하지 않음 (아무것도 안 함)" '[ ! -s $X/calls ]'
+rm -f $T/product
+# car_in: 차 목록 비교 (case 패턴은 변수로 '|'를 넘길 수 없어 목록을 하나씩 본다)
+cin() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c '. '$T'/app/svc/hotspot.sh; car_in "$1" "$CARS"' _ "$1"); }
+check "car_in: 한국 차는 모두 맞고(자동 시험 포함), 해외 차·빈 값은 아님" 'cin DEPEHEV.KOR.0000.V039.001.260902 && cin DN822HEV.KOR.0000.V039.001.260902 && cin DN822HEV.KOR.0000.V039.001.260101 && cin TESTX.KOR.0000.V001.001.250101 && ! cin DEPEHEV.USA.0000.V039.001.260902 && ! cin CVEV.USA.0000.V039.001.260507 && ! cin ""'
+cin2() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c '. '$T'/app/svc/hotspot.sh; car_in "$1" "$CARS_OK $CARS_TRY"' _ "$1"); }
+check "  목록(확인·시험 지원)은 니로·쏘나타 260902만" 'cin2 DEPEHEV.KOR.0000.V039.001.260902 && cin2 DN822HEV.KOR.0000.V039.001.260902 && ! cin2 DN822HEV.KOR.0000.V039.001.260101 && ! cin2 TESTX.KOR.0000.V001.001.250101'
+rm -rf $X/cwd; mkdir -p $X/cwd; : > $X/cwd/DEPEHEV.KOR.x.260902
+check "  현재 폴더에 패턴과 맞는 파일이 있어도 목록을 글자 그대로 비교" '(cd $X/cwd && cin DEPEHEV.KOR.0000.V039.001.260902)'
+check "  set -f 상태를 되돌림 (꺼져 있었으면 꺼짐, 켜져 있었으면 켜짐)" '(HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; car_in x \"\$CARS\"; case \$- in *f*) exit 1 ;; esac; set -f; car_in x \"\$CARS\"; case \$- in *f*) exit 0 ;; esac; exit 1")'
+rm -rf $X/cwd
+# try_ready: 시험 지원 차는 무선 모드가 설치·켜짐일 때만 핫스팟 시작 (확인된 차는 항상)
+tr_() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w HMGDATA=$X/hd sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$T'/bin:/usr/bin:/bin; try_ready "$1"' _ "$1"); }
+asreset
+check "try_ready: 니로는 모드가 없어도 시작, 쏘나타는 모드가 없으면 대기" 'tr_ DEPEHEV.KOR.0000.V039.001.260902 && ! tr_ DN822HEV.KOR.0000.V039.001.260902'
+mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json
+check "  쏘나타: 모드가 설치·켜짐이어도 적용 전(persist.sys.iap2.wifi≠t)이면 대기" '! tr_ DN822HEV.KOR.0000.V039.001.260902'
+echo t > $T/iap2
+check "  쏘나타·자동 시험 차: 모드가 적용되면(persist.sys.iap2.wifi=t) 시작" 'tr_ DN822HEV.KOR.0000.V039.001.260902 && tr_ TESTX.KOR.0000.V001.001.250101'
+: > $X/hd/mods/wireless-carplay-aa/.disabled
+check "  쏘나타: 모드를 꺼 두었으면 대기" '! tr_ DN822HEV.KOR.0000.V039.001.260902'
+rm -f $T/iap2
+check "서비스: 시험 지원 차 대기 반복은 try_ready로 끝남 (sleep 60 + wait)" 'grep -q "while ! try_ready \"\$prod\"; do sleep 60 & wait \$!; done" $T/app/svc/hotspot.sh'
 
 # preun: 우리가 설치한 모드만 정리
 PU=$T/pu; mkdir -p $PU/bk
@@ -224,6 +299,9 @@ pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/x (stock)" "change
 check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $T/toast'
 pureset; : > $PU/bk/mod.ours; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data; pu; rm -rf $PU/stage
 check "  업데이트 중(staging에 새 버전)에는 모드를 지우지 않음" '! grep -q "engine remove" $X/calls'
+pureset; : > $PU/bk/mod.ours; touch $X/down; pu; rm -f $X/down
+check "  HMG-API 데몬이 응답하지 않으면 지우지 못하니 앱에서 지우라고 안내" '! grep -q "engine remove" $X/calls && grep -q "HMG-API 앱에서 무선 모드" $T/toast'
+rm -f $T/toast
 
 # --- 1c. 상태 화면 앱: Report(판단·제보 링크)와 QR 크기, QrCode가 HMG-API 원본과 같은지 ---
 if command -v javac >/dev/null 2>&1; then
@@ -290,11 +368,11 @@ lg() { (PATH=$LG/bin:/usr/bin:/bin HOTSPOT_LIB=1 BB=${1:-$T/bin/bb} W=$LG/w sh -
 rm -f $LG/w/*; lg
 check "디버그 파일이 없으면 로그를 켜지 않음" '[ ! -f $LG/w/cp.log ] && [ ! -f $LG/w/log.pid ]'
 : > $LG/w/debug; lg
-check "잡음 줄(iAPSendMessage 확인 줄, getCANSTatus, getCANStatus)과 다른 태그는 버림" '! grep -q -E "Command Received|done with \(0x00\)|getCANSTatus|getCANStatus|OtherApp" $LG/w/cp.log'
+check "잡음 줄(iAPSendMessage 확인 줄, getCANSTatus, getCANStatus, 교차로 이름)과 다른 태그는 버림" '! grep -q -E "Command Received|done with \(0x00\)|getCANSTatus|getCANStatus|crossroadname|OtherApp" $LG/w/cp.log'
 check "  전송 실패(done with 0x01)는 남김" 'grep -q "done with (0x01)" $LG/w/cp.log'
 check "  보낸 iAPSendMessage 줄(크기)은 남김 (위치 전송 확인용)" 'grep -q "iAPSendMessage() : data(0x5F862158) size(57)" $LG/w/cp.log'
 check "  iAP2 태그(위치 요청)와 getCANStatus로 시작하지 않는 NavigationCluster 줄은 남김" 'grep -q "LocationInformationStart" $LG/w/cp.log && grep -q "updateTBTSubInfo" $LG/w/cp.log'
-check "  교차로 이름과 HMG-API 줄은 남김" 'grep -q "crossroadname is TEST-RD" $LG/w/cp.log && grep -q "hud list type 72" $LG/w/cp.log'
+check "  HMG-API 줄은 남김" 'grep -q "hud list type 72" $LG/w/cp.log'
 check "  연속된 pcm_write 3줄은 한 줄과 횟수 3으로" '[ $(grep -c pcm_write $LG/w/cp.log) -eq 1 ] && grep -q -E "^ *3 11-06 04:25:56.040 .*pcm_write" $LG/w/cp.log'
 rm -f $LG/w/cp.log*; lg $LG/bin/bb-nouniq
 check "uniq를 못 쓰면 줄이지 않고 그대로 남김(로그가 끊기지 않음)" '[ $(grep -c pcm_write $LG/w/cp.log) -eq 3 ] && ! grep -q getCANSTatus $LG/w/cp.log'
@@ -325,13 +403,14 @@ STF=$T/status.txt
 echo "  101 root  hostapd /data/misc/wifi/hostapd-kp.conf" > $T/ps
 : > $T/mounts
 STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
-check "USB가 마운트 안 됐으면 USB에 쓰지 않고 토스트도 없음 (상태는 화면이 보여 줌)" '[ ! -f $T/usb0/korea-projection-report.md ] && [ ! -f $T/toast ]'
+check "USB가 마운트 안 됐으면 USB에 쓰지 않고 토스트도 없음 (상태는 화면이 보여 줌)" '[ ! -d $T/usb0/KoreaProjection-report ] && [ ! -f $T/toast ]'
 echo "/dev/block/sda1 $T/usb0 vfat rw 0 0" > $T/mounts
 mkdir -p $T/hl
 printf '%s\n' "01-01 18:30:04.730 I/HMG-API (  148): hook map: none for Kia Niro, hooks off (no map)" > $T/hl/log.log.1
 printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: mapped for Kia Niro Hybrid (kor 260902), hooks on, 1 point(s) not mapped (their features and mods are off)" "11-06 09:05 I/HMG-API ( 1): other" > $T/hl/log.log
 HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
-R=$T/usb0/korea-projection-report.md
+R=$T/usb0/KoreaProjection-report/1-report.md
+G3=$T/usb0/KoreaProjection-report/3-log.txt
 check "상태 화면용 파일: 644, 키 25개" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 25 ]'
 check "  HMG-API 무선 모드 파일이 없으면 mod=no, mod_on=no, bridge=on" 'grep -qx "mod=no" $STF && grep -qx "mod_on=no" $STF && grep -qx "bridge=on" $STF'
 HM=$T/hm; mkdir -p $HM/mod $HM/set; echo '{"id":"wireless-carplay-aa"}' > $HM/mod/mod.json
@@ -354,10 +433,35 @@ HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T
 check "  HMG-API 로그가 없으면 빈 값" 'grep -qx "hooks=" $STF && grep -qx "hookmap=" $STF'
 check "  SSID·비밀번호·폰 IP 없음, 길이만" '! grep -q -e "SSID.cX" -e PASS -e HotspotName -e 192.168.43.23 $STF && grep -qx "ssid_len=7" $STF'
 check "  화면 키와 같은 이름 (our_ap, feat_carplay, cp_conn)" 'grep -qx "our_ap=yes" $STF && grep -q "^feat_carplay=" $STF && grep -qx "cp_conn=1" $STF' 
-check "USB에 리포트 저장" '[ -s $R ]'
+check "USB에 리포트 저장 (KoreaProjection-report/1-report.md)" '[ -s $R ]'
+check "USB에 분석용 로그 저장 (3-log.txt): 서비스·자동 설정·HMG-API 로그 칸" '[ -s $G3 ] && grep -q "^== ap.log" $G3 && grep -q "^== verify-map.txt" $G3 && grep -q "^== HMG-API 로그" $G3'
+mkdir -p $T/hlm; printf '%s\n' "11-06 09:00:00.000 I/HMG-API ( 1): [wireless-carplay-aa] bridge: iPhone BT connected: A1:B2:C3:D4:E5:F6" "11-06 09:00:01.000 I/HMG-API ( 1): dhcp 192.168.43.23 ok, version 1.0.2" "11-06 09:00:02.000 I/HMG-API ( 1): v6 fe80::1c2d:3eff:fe4f:5a6b%wlan0" > $T/hlm/log.log
+echo old > $T/usb0/KoreaProjection-report/2-car-report.json
+echo "11-06 09:00 시작 (DEPEHEV.KOR.0000.V039.001.260902): 폰 10.0.0.7 aa:bb:cc:dd:ee:ff" > $T/logs/ap.log
+HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "  로그에서 블루투스 주소·IP는 지우고, 버전·제품명은 남김" '! grep -q -i -e "A1:B2:C3" -e "aa:bb:cc" -e 192.168.43.23 -e 10.0.0.7 $G3 && grep -q "xx:xx:xx:xx:xx:xx" $G3 && grep -q "x.x.x.x" $G3 && grep -q "version 1.0.2" $G3 && grep -q "DEPEHEV.KOR.0000.V039.001.260902" $G3 && ! grep -q "1c2d:3eff" $G3 && grep -q "fe80:x" $G3'
+check "  예전 Launch의 2-car-report.json은 지움 (새 1·3번과 섞이지 않게)" '[ ! -f $T/usb0/KoreaProjection-report/2-car-report.json ]'
+seq 1 1000 | sed "s/^/11-06 I\/HMG-API: line /" > $T/hlm/log.log; HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "  HMG-API 로그는 마지막 800줄만" '[ "$(grep -c "line " $G3)" = 800 ] && grep -q "line 1000$" $G3 && ! grep -q "line 200$" $G3'
+check "  휴대폰 이름이 들어가는 디버그 로그(cp.log)는 넣지 않음" '! grep -q "cp.log" $G3'
+rm -rf $T/hlm; rm -f $T/logs/ap.log
 check "리포트에 SSID·비밀번호·폰 IP 없음" '! grep -q -e "SSID.cX" -e "PASS" -e HotspotName -e 192.168.43.23 $R'
 check "우리 hostapd 인식" 'grep -q "우리 hostapd: 예" $R'
 check "wifi.direct를 wifi로 착각하지 않음" 'grep -q "android.hardware.wifi: 아니요" $R'
+check "니로: 상태 화면 tested=yes, 리포트 '확인된 차: 예'" 'grep -qx "tested=yes" $STF && grep -q "확인된 차: 예" $R'
+echo DN822HEV.KOR.0000.V039.001.260902 > $T/product
+mkdir -p $T/hl9; printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: probed for Hyundai Sonata Hybrid (DN8) (kor 260902), hooks on" > $T/hl9/log.log
+HMGLOG=$T/hl9 STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "쏘나타(시험 지원): 상태 화면 tested=yes(앱이 '대기 중'으로 안 보임), 리포트 '시험 지원'" 'grep -qx "tested=yes" $STF && grep -q "확인된 차: 시험 지원" $R'
+echo TESTX.KOR.0000.V001.001.250101 > $T/product
+HMGLOG=$T/hl9 STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "목록에 없는 한국 차(자동 시험): tested=yes, 리포트 '자동 시험'" 'grep -qx "tested=yes" $STF && grep -q "확인된 차: 자동 시험" $R'
+echo DEPEHEV.USA.0000.V039.001.260902 > $T/product
+HMGLOG=$T/hl0 STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "목록에 없는 차: tested=no, 리포트 '아니요'" 'grep -qx "tested=no" $STF && grep -q "확인된 차: 아니요" $R'
+rm -f $T/product
+# 위 실행이 뒤에서 띄운 Car Report 작업이 끝날 때까지 기다린다(뒤 테스트와 겹치지 않게)
+i=0; while [ -d $T/w/carreport.lock ] && [ $i -lt 50 ]; do /bin/sleep 0.2; i=$((i+1)); done
 mkdir -p $T/hl0; printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: mapped for Kia Niro Hybrid (kor 260902), hooks on" > $T/hl0/log.log
 HMGLOG=$T/hl0 STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null; rm -rf $T/hl0
 check "토스트 한국어 (준비된 차: 핫스팟 상태와 리포트 저장)" 'grep -q "핫스팟 켜짐" $T/toast'
@@ -394,6 +498,17 @@ rm -f $CR/calls $CR/toast; cr
 check "Car Report: hmgapid engine report --usb 실행 → 성공 토스트(이제 USB를 빼셔도 됩니다), 잠금 해제" 'grep -qx "hmgapid engine report --usb" $CR/calls && grep -q "이제 USB를 빼셔도" $CR/toast && [ ! -d $CR/w/carreport.lock ]'
 : > $CR/mounts; rm -f $CR/toast; cr; echo "/dev/block/sda1 /storage/usb0 vfat rw 0 0" > $CR/mounts
 check "  USB가 실제로 마운트돼 있지 않으면(빈 마운트 폴더에 씀) 성공으로 보지 않음" 'grep -q "저장하지 못했습니다" $CR/toast'
+# 제보 폴더로 복사: USBROOT를 가짜 폴더로 돌려 실제 파일 복사를 본다
+mkdir -p "$CR/st/usb0/HMG-API reports"; echo '{"report": "hmgapi car report 1"}' > "$CR/st/usb0/HMG-API reports/kia-niro-20261106.json"
+sed -e "s#/storage/usb0/HMG-API#$CR/st/usb0/HMG-API#" $CR/bin/hmgapid > $CR/hm2; cp $CR/bin/hmgapid $CR/hm1; cp $CR/hm2 $CR/bin/hmgapid; chmod +x $CR/bin/hmgapid
+echo "/dev/block/sda1 $CR/st/usb0 vfat rw 0 0" > $CR/mounts; rm -f $CR/toast
+(PATH=$CR/bin:/usr/bin:/bin BB=$T/bin/bb W=$CR/w CR_WAIT=0.2 CR_MAX=50 CR_GRACE=0 MOUNTS=$CR/mounts BOOT_ID=$CR/boot USBROOT=$CR/st sh $CR/cr.sh)
+check "  Car Report를 제보 폴더에 2-car-report.json으로도 복사, 토스트에 폴더 이름" 'cmp -s "$CR/st/usb0/HMG-API reports/kia-niro-20261106.json" $CR/st/usb0/KoreaProjection-report/2-car-report.json && grep -q "KoreaProjection-report 폴더, 파일 3개" $CR/toast'
+rm -rf $CR/st/usb0/KoreaProjection-report; : > $CR/st/usb0/KoreaProjection-report; rm -f $CR/toast
+(PATH=$CR/bin:/usr/bin:/bin BB=$T/bin/bb W=$CR/w CR_WAIT=0.2 CR_MAX=50 CR_GRACE=0 MOUNTS=$CR/mounts BOOT_ID=$CR/boot USBROOT=$CR/st sh $CR/cr.sh)
+check "  제보 폴더로 복사가 실패하면 '파일 3개'라 하지 않고 HMG-API reports 폴더를 안내" 'grep -q "HMG-API reports. 폴더에 있습니다" $CR/toast && ! grep -q "파일 3개" $CR/toast'
+rm -f $CR/st/usb0/KoreaProjection-report
+cp $CR/hm1 $CR/bin/hmgapid; echo "/dev/block/sda1 /storage/usb0 vfat rw 0 0" > $CR/mounts
 touch $CR/fail; rm -f $CR/toast; cr; rm -f $CR/fail
 check "  실패하면 다시 해 달라는 토스트" 'grep -q "저장하지 못했습니다" $CR/toast'
 touch $CR/slow; rm -f $CR/toast; CRMAX=2 cr; rm -f $CR/slow
@@ -415,7 +530,7 @@ check "Launch: 확인된 차이고 훅이 켜져 있으면 Car Report를 만들�
 printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: none for Kia Niro, hooks off (no map)" > $T/hl/log.log
 PATH=$CR/bin:$PATH HMGLOG=$T/hl STATUS=$STF BB=$CR/bin/bbs APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null 2>&1
 i=0; while [ ! -f $T/w/carreport.txt ] && [ $i -lt 30 ]; do /bin/sleep 0.2; i=$((i+1)); done
-check "  훅이 꺼져 있으면 Car Report를 뒤에서 만들고, 기다리라는 토스트" '[ -f $T/w/carreport.txt ] && grep -q "제보 자료를 USB에 저장하는 중" $T/toast'
+check "  훅이 꺼져 있으면 Car Report를 뒤에서 만들고, 기다리라는 토스트" '[ -f $T/w/carreport.txt ] && grep -q "제보 자료를 USB의 KoreaProjection-report 폴더에 저장하는 중" $T/toast'
 : > $T/mounts; rm -f $T/w/carreport.txt
 PATH=$CR/bin:$PATH HMGLOG=$T/hl STATUS=$STF BB=$CR/bin/bbs APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null 2>&1
 /bin/sleep 1

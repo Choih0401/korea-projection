@@ -17,6 +17,10 @@ MOUNTS=${MOUNTS:-/proc/mounts}
 CR_WAIT=${CR_WAIT:-5}
 CR_MAX=${CR_MAX:-60}
 CR_GRACE=${CR_GRACE:-60}
+# USB 제보 폴더 이름(status.sh와 같아야 한다)
+RDIR=${RDIR:-KoreaProjection-report}
+# USB 마운트 위치의 앞부분(테스트에서 바꿀 수 있게)
+USBROOT=${USBROOT:-/storage}
 umask 077
 $BB mkdir -p $W
 
@@ -50,18 +54,25 @@ done
 wait $p 2>/dev/null
 rc=$?
 sync
-ok=0
+ok=0; copied=0
 if [ $rc = 0 ]; then
   while IFS= read -r _x; do
     case "$_x" in
-      "usb: /storage/usb"*"/HMG-API reports/"*)
-        _m=${_x#usb: }; _m=${_m%%/HMG-API reports/*}
-        $BB grep -q " $_m " $MOUNTS 2>/dev/null && ok=1 ;;
+      "usb: $USBROOT/usb"*"/HMG-API reports/"*)
+        _f=${_x#usb: }; _m=${_f%%/HMG-API reports/*}
+        $BB grep -q " $_m " $MOUNTS 2>/dev/null || continue
+        ok=1
+        # 사용자가 한 폴더만 첨부하면 되게, 리포트를 제보 폴더에 정해진 이름(2-car-report.json)으로도 복사한다
+        $BB mkdir -p "$_m/$RDIR" && $BB cp "$_f" "$_m/$RDIR/2-car-report.json" 2>/dev/null && copied=1 ;;
     esac
   done < $W/carreport.txt
 fi
-if [ $ok = 1 ]; then
-  toast "Korea Projection: 제보 자료를 모두 저장했습니다. 이제 USB를 빼셔도 됩니다."
+# vfat는 쓰기를 늦게 내보낸다: "USB를 빼셔도 됩니다" 전에 내보낸다
+sync
+if [ $ok = 1 ] && [ $copied = 1 ]; then
+  toast "Korea Projection: 제보 자료를 모두 저장했습니다(USB의 $RDIR 폴더, 파일 3개). 이제 USB를 빼셔도 됩니다."
+elif [ $ok = 1 ]; then
+  toast "Korea Projection: 제보 자료를 저장했습니다. Car Report는 USB의 'HMG-API reports' 폴더에 있습니다. 이제 USB를 빼셔도 됩니다."
 else
   # 시간이 넘었으면 HMG-API가 아직 쓰는 중일 수 있다: 조금 더 기다린 뒤 알린다
   [ $late = 1 ] && { sleep $CR_GRACE; sync; }
