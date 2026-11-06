@@ -63,7 +63,7 @@
 
 내 차에서 되는지 알려 주시면 지원 목록에 추가합니다. [차량 제보하기](../../issues/new?template=car-report.yml)
 
-되든 안 되든 [내 차 제보 가이드](docs/car-report-guide.md)대로 USB의 `KoreaProjection-report` 폴더 안 **파일 3개**를 보내 주세요. 된다고 알려 주시면 그 차를 **✅ 됨**으로 올리고, 안 되면 파일 속 기록으로 원인을 찾습니다.
+되든 안 되든 [내 차 제보 가이드](docs/car-report-guide.md)대로 USB의 `KoreaProjection-report` 폴더 안 **파일 3개**를 보내 주세요. 된다고 알려 주시면 그 차를 **✅ 확인됨**으로 올리고, 안 되면 파일 속 기록으로 원인을 찾습니다.
 
 ## 필요한 것
 
