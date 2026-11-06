@@ -33,7 +33,7 @@ printf '[nemesis]\ntype=install\npath=packages/korea.projection.zip\n' > "$W/NEM
 cat > "$W/README.txt" <<EOF
 Korea Projection $VER - USB 설치 파일
 
-1. USB를 FAT32 또는 exFAT으로 포맷합니다(32GB 이하 USB 권장).
+1. USB를 FAT32로 포맷합니다(32GB 이하 USB 권장).
 2. 이 폴더 "안에 있는 것"을 USB 맨 위에 그대로 복사합니다.
      USB
      ├─ NEMESIS.data
