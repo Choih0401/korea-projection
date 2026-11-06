@@ -11,6 +11,17 @@ ok() { echo "ok   $1"; }
 bad() { echo "FAIL $1"; fails=$((fails+1)); }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
+# 차의 셸(mksh) 구문 검사. 아래 테스트는 bash로 돌아서 ksh 계열만 틀리는 구문을 못 잡는다
+# (1.5.2: case 갈래 안의 ${_r%% (*} 때문에 모든 차에서 hotspot.sh가 시작되지 않았다).
+# 있는 것을 모두 돌린다: ksh(맥 기본 ksh93)가 이번 버그를 잡았고, PC의 mksh는 차의 옛 mksh보다 너그러울 수 있다.
+# 둘 다 없으면 건너뛰지 않고 실패로 둔다. 한계: eval 문자열 안, 실행할 때만 드러나는 차이, busybox 옵션은 못 잡는다.
+KSHS=$(for s in mksh ksh; do command -v $s; done)
+[ -n "$KSHS" ] || bad "구문 검사: mksh/ksh 없음"
+for f in $PKG/svc/hotspot.sh $PKG/scripts/post.sh $PKG/scripts/preun.sh $PKG/bin/status.sh \
+         $PKG/bin/carreport.sh $B/scripts/kp-update-test.sh; do
+  for KSH in $KSHS; do check "구문 검사 $(basename $KSH): ${f#$B/}" '$KSH -n $f'; done
+done
+
 mkdir -p $T/bin $T/app $T/w $T/apps $T/d $T/usb0/packages $T/logs
 printf '#!/bin/sh\nexec "$@"\n' > $T/bin/bb
 cat > $T/bin/getprop <<E
@@ -28,6 +39,7 @@ cat > $T/bin/pm <<E
 #!/bin/sh
 [ -f $T/feat ] && echo feature:com.hkmc.software.connectivity.carplay_wireless
 [ -f $T/hsfeat ] && echo feature:com.hkmc.software.wifihotspot
+[ -f $T/nowififeat ] || echo feature:android.hardware.wifi
 echo feature:android.hardware.wifi.direct
 E
 cat > $T/bin/nemesis <<E
@@ -151,7 +163,7 @@ case "\$1 \$2" in
     p=\$(cat $T/product 2>/dev/null || echo DEPEHEV.KOR.0000.V039.001.260902); m=\$(echo \$p | awk -F. '{print tolower(\$1)}'); f=\$(echo \$p | awk -F. '{print \$NF}')
     mkdir -p $X/hd/maps/unknown/\$m/kor/\$f; echo '{"status": "probed"}' > $X/hd/maps/unknown/\$m/kor/\$f/car.json
     echo "map-car: 342 hook point(s) found"; echo "written: unknown/\$m/kor/\$f (status probed): run hmgapid engine verify-map, then restart, for its hooks"; exit 0 ;;
-  "engine install") [ -f $X/inst_fail ] && exit 1; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; exit 0 ;;
+  "engine install") [ -f $X/inst_fail ] && exit 1; [ -f $X/chip_drop ] && { rm -rf $X/sdio; mkdir -p $X/sdio; exit 1; }; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; exit 0 ;;
   "engine plan") cat $X/plan; exit 0 ;;
   "engine apply") [ -f $X/apply_fail ] && exit 1; exit 0 ;;
   "engine remove") rm -rf $X/hd/mods/\$3; exit 0 ;;
@@ -163,8 +175,8 @@ chmod +x $X/bin/hmgapid
 PLAN_OK='change   /system/onebin/depehev_kr/featurexml.cfg [wireless-carplay-aa] -> 2a7c   [restart the head unit]
 setting  prop/persist.sys.iap2.wifi = t [wireless-carplay-aa]
 hook plan: wireless-carplay-aa on'
-asreset() { rm -rf $X/hd $X/bk $X/w $X/calls $X/mc_nw $X/vm_fail $X/inst_fail $X/apply_fail $X/down $T/toast; mkdir -p $X/hd/maps/kia/ev6 $X/bk $X/w; printf '%s\n' "$PLAN_OK" > $X/plan; }
-as() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
+asreset() { rm -rf $X/hd $X/bk $X/w $X/calls $X/mc_nw $X/vm_fail $X/inst_fail $X/apply_fail $X/down $T/toast; mkdir -p $X/hd/maps/kia/ev6 $X/bk $X/w; mkdir -p $X/hd/public; : > $X/hd/public/wifi-chip; printf '%s\n' "$PLAN_OK" > $X/plan; }
+as() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi SDIO=$X/nosdio sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
 NM=$X/hd/maps/kia/niro/kor/260902
 asreset; as > $X/out
 check "자동 설정: 니로 지도 12개를 넣고 HMG-API 지도 확인 실행" '[ "$(ls $NM | wc -l | tr -d " ")" = 12 ] && grep -qx "hmgapid engine verify-map" $X/calls && [ -f $X/bk/map.ours ]'
@@ -253,7 +265,42 @@ check "    그 지도의 확인이 실패하면 지우지 않고 automap.bad, �
 asreset; touch $X/mc_fail; as > $X/out; rm -f $X/mc_fail
 check "  지도 만들기가 실패하면 모드 설치 안 함, 제보 안내 토스트" '[ -f $X/bk/automap.bad ] && ! grep -q "engine install" $X/calls && grep -q "지도를 만들지 못했습니다" $T/toast'
 asreset; touch $T/hsfeat; as > $X/out; rm -f $T/hsfeat
-check "  순정 핫스팟 기능이 있는 차는 자동 시험 안 함 (지도·모드 모두)" '! grep -q -E "map-car|verify-map|engine install" $X/calls && grep -q "순정 핫스팟 기능" $X/out'
+check "  순정 핫스팟 기능이 있어도 꺼져 있으면 우리 방식으로 자동 시험 (지도 만들기·모드 설치)" 'grep -q map-car $X/calls && grep -q "engine install" $X/calls && grep -q "꺼져 있음: 우리 방식" $X/out'
+mv $T/ps $T/ps.keep 2>/dev/null; echo "  77 wifi  /system/bin/hostapd /data/misc/wifi/hostapd.conf" > $T/ps
+asreset; touch $T/hsfeat; as > $X/out; rm -f $T/hsfeat
+check "  순정 핫스팟이 켜져 있으면(우리 것이 아닌 hostapd) 이번 부팅은 건너뜀 (지도·모드 모두)" '! grep -q -E "map-car|verify-map|engine install" $X/calls && grep -q "다른 hostapd가 돌고 있음" $X/out'
+echo DN822HEV.KOR.0000.V039.001.260902 > $T/product; asreset; as > $X/out
+check "  시험 지원 차(쏘나타)도 순정 핫스팟이 켜져 있으면 건너뜀, 지도도 넣지 않음" '! grep -q -E "verify-map|engine install" $X/calls && [ ! -d $X/hd/maps/hyundai/sonata ] && grep -q "다른 hostapd가 돌고 있음" $X/out'
+echo "  88 wifi  hostapd /data/misc/wifi/hostapd-kp.conf" > $T/ps; asreset; as > $X/out
+check "  우리 hostapd만 돌면 순정으로 보지 않음" 'grep -q "engine install" $X/calls && ! grep -q "다른 hostapd가 돌고" $X/out'
+rm -f $T/ps; mv $T/ps.keep $T/ps 2>/dev/null
+asreset; mkdir -p $X/wp; (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi WPDIR=$X/wp SDIO=$X/nosdio sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out; rm -rf $X/wp
+check "  시험 지원 차(쏘나타)도 wireless.projection이 있으면 건너뜀, 지도도 넣지 않음" '! grep -q -E "verify-map|engine install" $X/calls && [ ! -d $X/hd/maps/hyundai/sonata ] && grep -q "wireless.projection이 설치" $X/out'
+check "  wireless.projection이 있으면 삭제 안내 토스트(한 번만)" 'grep -q "wireless.projection을 삭제한 뒤 내비를 재부팅" $T/toast && [ -f $X/bk/wp.told ]'
+rm -f $T/toast; mkdir -p $X/wp; (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi WPDIR=$X/wp SDIO=$X/nosdio sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out; rm -rf $X/wp
+check "    다음 부팅에는 토스트 없음" '[ ! -f $T/toast ]'
+mv $T/ps $T/ps.keep 2>/dev/null
+printf '%s\n' "  999997 wifi  Z [hostapd]" "  999996 root  busybox grep -E (hostapd|dnsmasq)" > $T/ps; asreset; as > $X/out
+check "  좀비 hostapd·grep 줄은 순정 핫스팟으로 보지 않음" 'grep -q "engine install" $X/calls && ! grep -q "다른 hostapd가 돌고" $X/out'
+rm -f $T/ps
+for c in "IGPEHEV grandeur" "JSN veloster-n"; do
+  # check는 eval 안에서 자기 인자($1·$2)를 쓰므로, 차 모델과 지도 폴더는 일반 변수로 넘긴다
+  CM=${c% *}; CD=${c#* }; echo $CM.KOR.0000.V039.001.260902 > $T/product; asreset; as > $X/out
+  check "  시험 지원 차 $CM: 그 차 지도($CD)만 넣고 확인·모드 설치" '[ -f $X/hd/maps/hyundai/$CD/kor/260902/car.json ] && [ "$(ls $X/hd/maps/hyundai | tr "\n" " ")" = "$CD " ] && grep -qx "hmgapid engine verify-map" $X/calls && grep -q "engine install" $X/calls'
+done
+# 핫스팟 도는 중 비켜 주기 (확인된 차가 아닐 때만)
+yt() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/yw sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; prod=$1; ap_yield; echo "rc=$?"' _ "$1"); }
+rm -rf $X/yw; mkdir -p $X/yw
+printf '%s\n' "  999998 wifi  hostapd /data/misc/wifi/hostapd-kp.conf" "  999999 wifi  /system/bin/hostapd /data/misc/wifi/hostapd.conf" > $T/ps
+check "ap_yield: 시험 차는 다른 hostapd가 돌면 비켜 줌(로그 한 번)" 'yt JSN.KOR.0000.V039.001.260902 > $X/y1 && grep -q "rc=0" $X/y1 && grep -q "멈추고 기다림" $X/y1 && [ -f $X/yw/ap.yield ] && yt JSN.KOR.0000.V039.001.260902 > $X/y2 && grep -q "rc=0" $X/y2 && ! grep -q "멈추고" $X/y2'
+echo "  999998 wifi  hostapd /data/misc/wifi/hostapd-kp.conf" > $T/ps
+check "  다른 hostapd가 멈추면 다시 켬(로그 한 번)" 'yt JSN.KOR.0000.V039.001.260902 > $X/y3 && grep -q "rc=1" $X/y3 && grep -q "다시 켬" $X/y3 && [ ! -f $X/yw/ap.yield ]'
+echo "  999999 wifi  /system/bin/hostapd /data/misc/wifi/hostapd.conf" > $T/ps
+check "  확인된 차(니로)는 비켜 주지 않음" 'yt DEPEHEV.KOR.0000.V039.001.260902 > $X/y4 && grep -q "rc=1" $X/y4'
+rm -f $T/ps; mv $T/ps.keep $T/ps 2>/dev/null
+check "서비스: 시작 전 다른 hostapd 대기와 루프의 비켜 주기가 있음" 'grep -q "while stock_ap_on; do sleep 60 & wait \$!; done" $T/app/svc/hotspot.sh && grep -q "ap_yield && continue" $T/app/svc/hotspot.sh'
+check "패키지의 모드 zip md5가 MOD_MD5와 같음" '[ "$(md5 -q $PKG/hmgapi/wireless-carplay-aa.zip 2>/dev/null || md5sum < $PKG/hmgapi/wireless-carplay-aa.zip | cut -d" " -f1)" = "$(sed -n "s/^MOD_MD5=//p" $PKG/svc/hotspot.sh)" ]'
+echo TESTX.KOR.0000.V039.001.260101 > $T/product
 asreset; mkdir -p $X/wp; (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi WPDIR=$X/wp sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi') > $X/out; rm -rf $X/wp
 check "  wireless.projection이 설치된 차는 자동 시험 안 함" '! grep -q -E "map-car|verify-map|engine install" $X/calls && grep -q "wireless.projection이 설치" $X/out'
 asreset; mkdir -p $X/hd/maps/kia/dl3/kor/260101; echo '{"products": ["TESTX.KOR."]}' > $X/hd/maps/kia/dl3/kor/260101/car.json
@@ -262,6 +309,52 @@ check "  다른 폴더 이름의 이 차 지도(공식판)가 있으면 그 지�
 asreset; echo TESTX.USA.0000.V039.001.260101 > $T/product; as > $X/out
 check "해외 차는 자동 시험도 하지 않음 (아무것도 안 함)" '[ ! -s $X/calls ]'
 rm -f $T/product
+# Wi-Fi 칩 깨우기 (한국 펌웨어에는 Wi-Fi를 켜는 메뉴가 없어, 한 번도 안 켠 차는 칩이 SDIO에 안 보인다)
+cat > $X/bin/svc <<E
+#!/bin/sh
+echo "svc \$*" >> $X/calls
+[ "\$*" = "wifi enable" ] && [ -f $X/chip_ok ] && mkdir -p $X/sdio/mmc1:0001:1
+[ "\$*" = "wifi enable" ] && [ -f $X/svc_hang ] && exec /bin/sleep 30
+[ "\$*" = "wifi enable" ] && [ -f $X/svc_fail ] && exit 3
+exit 0
+E
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $X > $X/bin/am
+chmod +x $X/bin/svc $X/bin/am
+aw() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi SDIO=$X/sdio WAKE_MAX=100 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
+awreset() { asreset; rm -rf $X/sdio $X/chip_ok $X/chip_drop $X/toasts; rm -f $X/hd/public/wifi-chip; mkdir -p $X/sdio; echo 0 > $X/bk/wifi_on; }
+asreset; rm -f $X/toasts; as > $X/out
+check "Wi-Fi 칩 기록이 있으면 Wi-Fi를 건드리지 않음" '! grep -q "svc wifi" $X/calls && grep -q "engine install" $X/calls && ! grep -q "Wi-Fi를 한 번 켭니다" $X/toasts'
+awreset; mkdir -p $X/sdio/mmc1:0001:1; aw > $X/out
+check "  칩이 SDIO에 이미 보이면 Wi-Fi를 건드리지 않음" '! grep -q "svc wifi" $X/calls && grep -q "engine install" $X/calls'
+awreset; touch $X/chip_ok; aw > $X/out
+check "칩이 안 보이면 미리 안내하고 Wi-Fi를 한 번 켜고, 칩이 나타나면 모드 설치" 'grep -q "Wi-Fi를 한 번 켭니다" $X/toasts && grep -qx "svc wifi enable" $X/calls && grep -q "engine install" $X/calls && grep -q "칩이 나타남" $X/out && [ ! -f $X/bk/wifi.nochip ] && ! grep -q "svc wifi disable" $X/calls'
+check "  깨우기는 모드 설치보다 먼저" '[ "$(grep -n "svc wifi enable" $X/calls | cut -d: -f1)" -lt "$(grep -n "engine install" $X/calls | cut -d: -f1)" ]'
+awreset; touch $X/chip_ok $X/chip_drop; aw > $X/out; rm -f $X/calls $X/toasts; aw > $X/out2
+check "칩이 잠깐 보였다 사라져 설치가 실패해도 다음 부팅에 Wi-Fi를 다시 켜지 않음 (wifi.woke)" '[ -f $X/bk/wifi.woke ] && ! grep -q "svc wifi" $X/calls && ! grep -q "engine install" $X/calls && [ ! -s $X/toasts ]'
+awreset; aw > $X/out
+check "Wi-Fi를 켜도 칩이 안 나타나면 모드 설치 안 함, wifi.nochip, 재부팅·제보 안내" '! grep -q "engine install" $X/calls && [ -f $X/bk/wifi.nochip ] && [ ! -f $X/bk/mod.tried ] && grep -q "Wi-Fi 칩을 찾지 못해.*재부팅" $X/toasts'
+check "  설치 전에 Wi-Fi가 꺼져 있었으면 다시 끔" 'grep -qx "svc wifi disable" $X/calls'
+rm -f $X/calls $X/toasts; aw > $X/out
+check "  다음 부팅: Wi-Fi를 다시 켜지 않고, 토스트도 없음" '! grep -q "svc wifi" $X/calls && ! grep -q "engine install" $X/calls && [ ! -s $X/toasts ]'
+mkdir -p $X/sdio/mmc1:0001:1; rm -f $X/calls; aw > $X/out
+check "  그 뒤 칩이 보이게 되면(차주가 켬) 기록과 상관없이 모드 설치" 'grep -q "engine install" $X/calls && ! grep -q "svc wifi" $X/calls'
+awreset; echo 1 > $X/bk/wifi_on; aw > $X/out
+check "  설치 전에 Wi-Fi가 켜져 있었으면 끄지 않음" '! grep -q "svc wifi disable" $X/calls'
+awreset; echo null > $X/bk/wifi_on; aw > $X/out
+check "  설치 전 값이 null(한 번도 안 켬)이면 꺼져 있던 것으로 보고 끔" 'grep -qx "svc wifi disable" $X/calls'
+awreset; rm -f $X/bk/wifi_on; aw > $X/out
+check "  설치 전 기록이 없으면 끄지 않음" '! grep -q "svc wifi disable" $X/calls'
+awreset; touch $T/nowififeat $X/chip_ok; aw > $X/out; rm -f $T/nowififeat
+check "Android Wi-Fi 기능이 목록에 없어도(니로처럼) Wi-Fi를 켜서 칩을 깨움" 'grep -qx "svc wifi enable" $X/calls && grep -q "engine install" $X/calls'
+awreset; touch $X/svc_fail; aw > $X/out; rm -f $X/svc_fail
+check "  svc wifi enable이 실패하면 종료 코드를 기록하고 nochip으로 끝냄" 'grep -q "svc wifi enable 실패 (종료 코드 3)" $X/out && [ -f $X/bk/wifi.nochip ] && ! grep -q "engine install" $X/calls'
+awreset; touch $X/svc_hang; aw > $X/out; rm -f $X/svc_hang
+check "  svc wifi enable이 끝나지 않으면 대기 시간 뒤 멈추고 끝냄" 'grep -q "끝나지 않아 멈춤" $X/out && [ -f $X/bk/wifi.nochip ] && ! grep -q "engine install" $X/calls'
+awreset; touch $X/chip_ok $X/vm_fail; aw > $X/out
+check "지도 확인이 실패하면 Wi-Fi를 켜지 않음 (모드를 넣지 않을 때는 깨우지 않음)" '! grep -q "svc wifi" $X/calls'
+awreset; touch $X/chip_ok; : > $X/bk/mod.tried; aw > $X/out
+check "  모드 설치를 이미 해 봤으면(mod.tried) Wi-Fi를 켜지 않음" '! grep -q "svc wifi" $X/calls'
+rm -f $X/bin/svc $X/bin/am
 # car_in: 차 목록 비교 (case 패턴은 변수로 '|'를 넘길 수 없어 목록을 하나씩 본다)
 cin() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c '. '$T'/app/svc/hotspot.sh; car_in "$1" "$CARS"' _ "$1"); }
 check "car_in: 한국 차는 모두 맞고(자동 시험 포함), 해외 차·빈 값은 아님" 'cin DEPEHEV.KOR.0000.V039.001.260902 && cin DN822HEV.KOR.0000.V039.001.260902 && cin DN822HEV.KOR.0000.V039.001.260101 && cin TESTX.KOR.0000.V001.001.250101 && ! cin DEPEHEV.USA.0000.V039.001.260902 && ! cin CVEV.USA.0000.V039.001.260507 && ! cin ""'
@@ -299,6 +392,12 @@ pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/x (stock)" "change
 check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $T/toast'
 pureset; : > $PU/bk/mod.ours; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data; pu; rm -rf $PU/stage
 check "  업데이트 중(staging에 새 버전)에는 모드를 지우지 않음" '! grep -q "engine remove" $X/calls'
+pureset; echo null > $PU/bk/wifi_on; rm -f $T/calls; pu
+check "삭제: 설치 전 Wi-Fi 값이 null(한 번도 안 켬)이면 Wi-Fi를 끔" 'grep -qx "svc wifi disable" $T/calls'
+pureset; echo 1 > $PU/bk/wifi_on; rm -f $T/calls; pu
+check "  설치 전에 켜져 있었으면 끄지 않음" '! grep -q "svc wifi disable" $T/calls 2>/dev/null'
+pureset; rm -f $T/calls; pu
+check "  설치 전 기록이 없으면 끄지 않음" '! grep -q "svc wifi disable" $T/calls 2>/dev/null'
 pureset; : > $PU/bk/mod.ours; touch $X/down; pu; rm -f $X/down
 check "  HMG-API 데몬이 응답하지 않으면 지우지 못하니 앱에서 지우라고 안내" '! grep -q "engine remove" $X/calls && grep -q "HMG-API 앱에서 무선 모드" $T/toast'
 rm -f $T/toast
@@ -397,6 +496,8 @@ kill $SP 2>/dev/null; wait $SP 2>/dev/null; rm -f $LG/w/log.pid; printf '%0200d\
 check "  로그가 꺼져 있으면(log.pid 없음) 밀어내지 않음" 'grep -q 9$ $LG/w/cp.log'
 
 # --- 2. status.sh: 리포트, 비밀 미포함, USB 마운트 확인 ---
+# 이 구역의 리포트는 Android Wi-Fi 기능이 없는 차로 만든다(wifi.direct만 있음: 둘을 헷갈리지 않는지 본다)
+touch $T/nowififeat
 fixpath $PKG/bin/status.sh | sed -e "s#/storage/usb0 /storage/usb1#$T/usb0#" \
   -e "s#/proc/mounts#$T/mounts#" -e "s#/data/nemesis/logs/korea.projection/ap.log#$T/logs/ap.log#" > $T/st.sh
 STF=$T/status.txt
@@ -448,6 +549,7 @@ rm -rf $T/hlm; rm -f $T/logs/ap.log
 check "리포트에 SSID·비밀번호·폰 IP 없음" '! grep -q -e "SSID.cX" -e "PASS" -e HotspotName -e 192.168.43.23 $R'
 check "우리 hostapd 인식" 'grep -q "우리 hostapd: 예" $R'
 check "wifi.direct를 wifi로 착각하지 않음" 'grep -q "android.hardware.wifi: 아니요" $R'
+rm -f $T/nowififeat
 check "니로: 상태 화면 tested=yes, 리포트 '확인된 차: 예'" 'grep -qx "tested=yes" $STF && grep -q "확인된 차: 예" $R'
 echo DN822HEV.KOR.0000.V039.001.260902 > $T/product
 mkdir -p $T/hl9; printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: probed for Hyundai Sonata Hybrid (DN8) (kor 260902), hooks on" > $T/hl9/log.log
@@ -574,6 +676,8 @@ touch $T/usb0/kp-rollback
 check "kp-rollback 파일 → 되돌리기" '[ "$(run)" = B-rollback ]'
 
 # --- 4. kp-update-test.sh: 업데이트 → 삭제 확인 → 다시 설치 ---
+# 시험 스크립트가 올릴 버전(WANT)을 그대로 쓴다: 버전을 올릴 때 테스트를 고치지 않아도 된다
+KPW=$(sed -n "s/^WANT=//p" $B/scripts/kp-update-test.sh)
 X=$T/up; mkdir -p $X/bin $X/usb/packages $X/d $X/apps $X/perms $X/wd $X/bk
 echo zip > $X/usb/packages/korea.projection.zip; echo prev > $X/usb/packages/korea.projection-prev.zip
 touch $X/perms/com.hkmc.software.connectivity.carplay_wireless.xml $X/perms/com.hkmc.software.connectivity.androidauto_wireless.xml
@@ -585,7 +689,7 @@ case "\$1" in
   pkg-list) echo "usb-handler|USB Handler|1|service|1.16.7|x"; [ -f $X/ver ] && echo "korea.projection|Korea Projection|0|service,application|\$(cat $X/ver)|x" ;;
   install) case "\$*" in *prev.zip) echo 1.3 > $X/ver; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap; exit 0 ;; esac
     # 실제 NEMESIS처럼: 업데이트는 예전 것을 먼저 지우므로, 실패하면 아무것도 남지 않는다
-    [ -f $X/inst_fail ] && { [ "\$2" = --update ] && rm -f $X/ver $X/ap; exit 1; }; [ "\$2" = --update ] && [ ! -f $X/ver ] && exit 1; echo 1.4.3 > $X/ver; mkdir -p $X/bk; [ -f $X/bk/wifi_on ] || cat $X/wifi > $X/bk/wifi_on; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap ;;
+    [ -f $X/inst_fail ] && { [ "\$2" = --update ] && rm -f $X/ver $X/ap; exit 1; }; [ "\$2" = --update ] && [ ! -f $X/ver ] && exit 1; echo $KPW > $X/ver; mkdir -p $X/bk; [ -f $X/bk/wifi_on ] || cat $X/wifi > $X/bk/wifi_on; mkdir -p $X/apps/korea.projection $X/wd $X/bk; touch $X/conf; echo up > $X/ap ;;
   uninstall) rm -f $X/ver; rm -rf $X/apps/korea.projection $X/bk; [ -f $X/leave_wd ] || rm -rf $X/wd; rm -f $X/conf $X/ap ;;
 esac
 exit 0
@@ -611,7 +715,7 @@ chmod +x $X/bin/*
 sed "s#^export PATH=.*#export PATH=$X/bin:/usr/bin:/bin:/sbin#" $B/scripts/kp-update-test.sh > $X/kp2.sh
 echo "/dev/block/sda1 $X/usb vfat rw 0 0" > $X/mounts
 urun() { (cd $X && MOUNTS=$X/mounts U=$X/usb D=$X/d APPS=$X/apps PERMS=$X/perms CONF=$X/conf WD=$X/wd BK=$X/bk BB=$T/bin/bb timeout 60 sh $X/kp2.sh >/dev/null 2>&1); cat $X/d/step 2>/dev/null || echo none; }
-check "업데이트: 1.4.3 설치되고 핫스팟 켜짐 → R" '[ "$(urun)" = R ] && grep -q "install --update" $X/calls'
+check "업데이트: $KPW 설치되고 핫스팟 켜짐 → R" '[ "$(urun)" = R ] && grep -q "install --update" $X/calls'
 check "  삭제 직후 확인 7개 통과 → R2 (재시작 안내)" '[ "$(urun)" = R2 ] && [ "$(grep -c "^통과" $X/usb/kp7/R.txt)" = 7 ] && grep -q "내비를 재부팅한 뒤" $X/toast'
 check "  재시작 뒤 확인 + 다시 설치 모두 통과 → DONE" '[ "$(urun)" = DONE ] && ! grep -q "^실패" $X/usb/kp7/R.txt && [ "$(grep -c "^통과" $X/usb/kp7/R.txt)" = 15 ] && grep -q "모두 통과" $X/toast'
 check "  다시 설치는 헤드유닛에 복사한 zip으로" 'grep -q "^nemesis install $X/d/pkg.zip" $X/calls'

@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # korea.projection: the wireless CarPlay access point on Korean head units (tested: Niro DEPEHEV.KOR 260902;
-# 시험 지원: 쏘나타 DN8 DN822HEV.KOR 260902).
+# 시험 지원: 쏘나타 DN8 DN822HEV, 그랜저 하이브리드 IGPEHEV, 벨로스터 N JSN .KOR 260902).
 # There the stock hotspot call (setWifiApEnabledForConnectivity) does nothing, but the stock
 # hostapd on wlan0 (nl80211) works. NEMESIS's svcmgr starts this at boot (mode=restart); it
 # waits for Android, starts hostapd + dnsmasq with the CarPlay network from softap.conf, then
@@ -20,12 +20,12 @@ DNSMASQ='dnsmasq --keep-in-foreground --no-resolv --no-poll'
 # 이 패키지가 동작하는 차. 목록에 없는 차(해외 차)는 로그만 남기고 대기한다.
 # - CARS_OK: 차에서 동작을 확인한 차 (니로 하이브리드)
 # - CARS_TRY: 제보(Car Report, 순정 체크섬)로 지도를 만들어 패키지에 넣었고, 차에서는 아직 확인하지 않은 차
-#   (쏘나타 하이브리드 DN8, HMG-API #91). 확인되면 CARS_OK로 옮긴다.
+#   (쏘나타 하이브리드 DN8 HMG-API #91, 그랜저 하이브리드 IG #7, 벨로스터 N #8). 확인되면 CARS_OK로 옮긴다.
 # - CARS_AUTO: 그 밖의 모든 한국 차(자동 시험, 1.5.2 소유자 결정). 패키지에 지도가 없으면 HMG-API가 그 차의
 #   파일로 지도를 만들고(engine map-car --write) 그 차에서 확인(verify-map)한 뒤에만 무선 모드를 적용한다.
 #   무선 모드(한국 차 빌드)도 Wi-Fi 칩이 있는 한국 차만 받는다. 결과는 제보 파일(3-log.txt)로 본다.
 CARS_OK='DEPEHEV.KOR.*.260902'
-CARS_TRY='DN822HEV.KOR.*.260902'
+CARS_TRY='DN822HEV.KOR.*.260902 IGPEHEV.KOR.*.260902 JSN.KOR.*.260902'
 CARS_AUTO='*.KOR.*'
 CARS="$CARS_OK $CARS_TRY $CARS_AUTO"
 # $1(제품명)이 $2(공백으로 나눈 패턴 목록)의 하나와 맞는가.
@@ -125,6 +125,8 @@ CONFEOF
 
 # a live process by name; a zombie ([hostapd], state Z) doesn't count
 running() { $BB ps | $BB grep -v grep | $BB grep -v " Z " | $BB grep -q "$1"; }
+# 우리 것이 아닌 hostapd(순정 핫스팟)가 살아 있는가: 우리 것은 설정 파일 경로($CONF)로 가린다
+stock_ap_on() { $BB ps | $BB grep -v grep | $BB grep -v " Z " | $BB grep -v "$CONF" | $BB grep -q hostapd; }
 
 up() {
   $BB ifconfig wlan0 $AP_IP netmask 255.255.255.0 up 2>/dev/null
@@ -144,11 +146,31 @@ up() {
 }
 
 # only our own hostapd and dnsmasq (matched by their command lines)
-stop_ap() {
+stop_ours() {
   for p in $($BB ps | $BB grep -v grep | $BB grep -E "hostapd $CONF|$DNSMASQ" | $BB awk '{print $1}'); do
     kill $p 2>/dev/null
   done
+}
+stop_ap() {
+  stop_ours
   killlog
+}
+
+# 확인된 차가 아니면, 다른 hostapd(순정 핫스팟 등)가 돌 때 우리 핫스팟을 멈추고 비켜 준다(wlan0을 다투지 않게).
+# 0: 비켜 줌(이번 회차는 아무것도 하지 않음), 1: 우리 핫스팟을 돌려도 됨. 로그는 상태가 바뀔 때만 남긴다($W/ap.yield).
+# 모드가 적용되면 순정 핫스팟 메뉴가 꺼지므로(featurexml) 보통은 일어나지 않지만, 적용 직후 재부팅 전에는 있을 수 있다.
+ap_yield() {
+  if ! car_in "$prod" "$CARS_OK" && stock_ap_on; then
+    if [ ! -f $W/ap.yield ]; then
+      : > $W/ap.yield; stop_ours
+      log "다른 hostapd가 돌고 있음(순정 핫스팟 등): 우리 핫스팟을 멈추고 기다림"
+    fi
+    return 0
+  fi
+  if [ -f $W/ap.yield ]; then
+    rm -f $W/ap.yield; log "다른 hostapd가 멈춤: 우리 핫스팟을 다시 켬"
+  fi
+  return 1
 }
 
 # 서비스가 끝날 때(TERM)와 패키지를 지울 때만: 핫스팟에 더해 뒤에서 도는 권한 파일 확인(fix_perms)도 멈춘다.
@@ -277,10 +299,13 @@ has_line() {
 #   이것을 먼저 지워야 한다(hmgapi/README.txt).
 KP_HMG=${KP_HMG:-$APP/hmgapi}
 HMGDATA=${HMGDATA:-/data/hmgapi}
+# HMG-API가 Wi-Fi 칩을 찾는 곳(SystemCheck.java): SDIO 장치, 한 번 본 기록
+SDIO=${SDIO:-/sys/bus/sdio/devices}
+WIFI_SEEN=${WIFI_SEEN:-$HMGDATA/public/wifi-chip}
 BK=${BK:-/data/nemesis/backup/korea.projection}
 MOD_ID=wireless-carplay-aa
 # 패키지에 든 모드 zip의 md5 (busybox 1.8.1에 sha256sum이 없다). zip을 바꾸면 함께 바꾼다.
-MOD_MD5=12cab7c253d0d5a95a8d0a9fcf194769
+MOD_MD5=f33667198419b91c319ad517a5223f29
 toast() {
   am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$1" \
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
@@ -304,6 +329,58 @@ plan_only_mod() {
   set +f
   return $_bad
 }
+# Wi-Fi 칩 깨우기: 한국 내수 펌웨어에는 일반 Wi-Fi를 켜는 메뉴가 없다. 그래서 Wi-Fi를 한 번도 켜지 않은 차는
+# 칩이 SDIO에 나타나지 않는다(MAC 00:00:00…, 그랜저 IGPEHEV 제보 #7).
+# HMG-API는 칩을 SDIO에서 한 번 봐야(그 기록 $WIFI_SEEN이 있어도 됨) 칩이 있다고 본다(hmgapi.wifi).
+# 무선 모드는 칩이 있어야 설치된다. 우리 핫스팟은 모드가 있어야 Wi-Fi를 켜므로, 모드를 넣기 전에 Wi-Fi를 한 번 켠다.
+# - 시스템 파일과 속성은 바꾸지 않는다(svc wifi enable만 한다).
+#   커뮤니티 "Wi-Fi 모듈 활성화 패치"는 build.prop·featurexml·권한 XML을 고친다. 우리는 그중 Wi-Fi를 켜는 것만 한다.
+# - 기능 목록(android.hardware.wifi)으로 거르지 않는다: 니로는 이 기능이 없는데도 svc wifi enable로 Wi-Fi가 켜진다
+#   (2026-11-06 차에서 확인). Wi-Fi 서비스가 없는 차는 칩이 안 나타나 wifi.nochip으로 끝난다.
+# - Wi-Fi를 켜면 USB·블루투스가 다시 시작된다(유선 카플레이가 끊길 수 있다). 그래서 평생 한 번만 한다.
+#   켜기 전에 $BK/wifi.woke를 남긴다. 칩이 잠깐 보였다 사라져(드라이버가 내려감) 설치가 실패해도
+#   부팅마다 다시 켜지 않는다. 기록은 패키지를 지우면 같이 지워진다.
+#   칩이 안 나타나면 $BK/wifi.nochip을 남기고, 설치 전에 Wi-Fi가 켜져 있지 않았으면 다시 끈다
+#   (wifi_on이 1이 아니면 꺼져 있던 것으로 본다: 한 번도 안 켠 차는 값이 null일 수 있다).
+# - 차주가 다른 방법으로 Wi-Fi를 켜 칩이 보이면 기록과 상관없이 다음 부팅에 설치를 다시 시도한다.
+# 돌려주는 값: 0 칩이 보임(원래 보였거나 이번에 깨움), 1 이번에 못 깨움, 2 예전에 깨우기를 해 봄(다시 안 함)
+wifi_chip_seen() {
+  [ -f $WIFI_SEEN ] || [ -n "$(ls $SDIO 2>/dev/null)" ]
+}
+wifi_was_off() {
+  [ -f $BK/wifi_on ] && [ "$(cat $BK/wifi_on 2>/dev/null)" != 1 ]
+}
+# 뒤에서 돌린 svc wifi enable 정리: 아직 돌면 멈추고, 끝났으면 실패한 종료 코드만 기록한다(제보 분석용)
+svc_done() {
+  if kill -0 $1 2>/dev/null; then
+    kill $1 2>/dev/null; log "svc wifi enable이 끝나지 않아 멈춤"
+  else
+    wait $1; _rc=$?
+    [ $_rc = 0 ] || log "svc wifi enable 실패 (종료 코드 $_rc)"
+  fi
+}
+wake_wifi() {
+  wifi_chip_seen && return 0
+  [ -f $BK/wifi.nochip ] || [ -f $BK/wifi.woke ] && return 2
+  log "Wi-Fi 칩이 아직 안 보임: Wi-Fi를 한 번 켜서 칩을 깨움"
+  toast "Korea Projection: 무선 카플레이 준비로 Wi-Fi를 한 번 켭니다. 카플레이·블루투스가 잠시 끊길 수 있습니다."
+  : > $BK/wifi.woke
+  # svc는 뒤에서 돌린다: 시스템 서버가 멈춰 있으면 바인더 호출이 끝나지 않을 수 있어, 아래 대기 시간이 상한이 된다
+  svc wifi enable > /dev/null 2>&1 &
+  _sp=$!
+  _i=0
+  while [ $_i -lt ${WAKE_MAX:-30} ]; do
+    sleep 2
+    wifi_chip_seen && { svc_done $_sp; log "Wi-Fi 칩이 나타남"; return 0; }
+    _i=$((_i+1))
+  done
+  svc_done $_sp
+  log "Wi-Fi를 켜도 칩이 나타나지 않음 (다음 부팅부터 다시 하지 않음)"
+  : > $BK/wifi.nochip
+  wifi_was_off && svc wifi disable
+  return 1
+}
+
 setup_hmgapi() {
   car_in "$(getprop ro.build.product 2>/dev/null)" "$CARS" || return 0
   [ -d $HMGDATA/maps ] || { log "자동 설정 건너뜀: HMG-API가 없음"; return 0; }
@@ -322,7 +399,29 @@ setup_hmgapi() {
   _prod=$(getprop ro.build.product 2>/dev/null)
   _pm=${_prod%%.*}; _pr=${_prod#*.}; _pr=${_pr%%.*}
   _tmp=$HMGDATA/maps/.kp-tmp
+  # 우리가 무선을 맡지 않는 차(확인된 차가 아니고 무선 모드를 아직 넣지 않았을 때만 본다. 모드가 기능 파일을
+  # 바꾸면 결과가 달라지므로). 시험 지원 차(CARS_TRY)와 자동 시험 차 모두 본다. 지도도 넣지 않는다.
+  # - wireless.projection이 설치된 차: 같은 파일·속성을 다른 패키지가 관리한다(먼저 지워야 한다)
+  # - 순정 핫스팟이 지금 켜져 있는 차(우리 것이 아닌 hostapd가 돎): 순정이 wlan0을 쓰고 있으므로 이번 부팅은
+  #   건너뛰고 다음 부팅에 다시 본다. 순정 핫스팟 기능이 있어도 꺼져 있으면 우리 방식으로 한다
+  #   (2026-11-06 소유자 결정. 벨로스터 N JSN은 기능이 있지만 순정 무선 카플레이는 없다).
+  _skip=0
+  if ! car_in "$_prod" "$CARS_OK" && [ ! -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
+    if [ -d $WPDIR ]; then
+      log "무선 설정 안 함: wireless.projection이 설치되어 있음 (먼저 삭제해 주세요)"; _skip=1
+      if [ ! -f $BK/wp.told ]; then
+        : > $BK/wp.told
+        toast "Korea Projection: wireless.projection이 설치되어 있어 무선 카플레이를 설정하지 않았습니다. wireless.projection을 삭제한 뒤 내비를 재부팅해 주세요."
+      fi
+    elif stock_ap_on; then
+      log "무선 설정 안 함: 다른 hostapd가 돌고 있음(순정 핫스팟 등) (다음 부팅에 다시 봄)"; _skip=1
+    elif pm list features 2>/dev/null | $BB grep -q '^feature:com\.hkmc\.software\.wifihotspot$'; then
+      log "순정 핫스팟 기능이 있지만 꺼져 있음: 우리 방식으로 진행"
+    fi
+  fi
+  [ $_skip = 1 ] && _mapbad=1
   for _c in $KP_HMG/maps/*/*/*/*/car.json; do
+    [ $_skip = 1 ] && break
     [ -f "$_c" ] || continue
     _d=${_c%/car.json}; _rel=${_d#$KP_HMG/maps/}
     [ "${_rel##*/}" = "${_prod##*.}" ] && $BB grep -q "\"$_pm\.$_pr\.\"" $_c || continue
@@ -350,17 +449,8 @@ setup_hmgapi() {
   # 이미 있는 지도(공식판, 차주가 만든 것)는 건드리지 않고, 확인만 한 번 한다(_myrel 없음 → 지우지 않음).
   _auto=0
   car_in "$_prod" "$CARS_OK $CARS_TRY" || _auto=1
-  # 자동 시험을 하지 않는 차(무선 모드를 아직 넣지 않았을 때만 본다. 모드가 기능 파일을 바꾸면 결과가 달라지므로):
-  # - wireless.projection이 설치된 차: 같은 파일·속성을 다른 패키지가 관리한다
-  # - 순정 핫스팟 기능(com.hkmc.software.wifihotspot)이 있는 차: 순정 무선이 될 수 있어 우리가 wlan0을 가져가면 안 된다
-  #   (니로·쏘나타 같은 한국 내수 차에는 없다. 쏘나타 Car Report의 기능 목록으로 확인)
-  if [ $_auto = 1 ] && [ ! -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
-    if [ -d $WPDIR ]; then
-      log "자동 시험 안 함: wireless.projection이 설치되어 있음"; _auto=0; _mapbad=1
-    elif pm list features 2>/dev/null | $BB grep -q '^feature:com\.hkmc\.software\.wifihotspot$'; then
-      log "자동 시험 안 함: 순정 핫스팟 기능이 있는 차 (순정 무선과 부딪히지 않게)"; _auto=0; _mapbad=1
-    fi
-  fi
+  # 위에서 건너뛰기로 한 차는 자동 시험도 하지 않는다
+  [ $_skip = 1 ] && _auto=0
   if [ $_auto = 1 ] && [ -f $BK/automap.bad ]; then
     log "자동 시험: 이 차에서 만든 지도가 확인에 실패한 기록이 있어 무선 모드를 넣지 않음"; _mapbad=1
   elif [ $_auto = 1 ] && [ $_mine = 0 ]; then
@@ -376,7 +466,7 @@ setup_hmgapi() {
       _nw=0
       while IFS= read -r _l; do
         case "$_l" in
-          "written: "*) _r=${_l#written: }; _myrel=${_r%% (*} ;;
+          "written: "*) _r=${_l#written: }; _myrel=${_r%%" ("*} ;;
           "not written: HMG-API has a map"*) _nw=1 ;;
         esac
       done < $W/map-car.txt
@@ -429,8 +519,15 @@ setup_hmgapi() {
     if [ "$1" != $MOD_MD5 ]; then
       : > $BK/mod.tried
       log "무선 모드 설치 안 함: 패키지의 zip md5가 다름 (${1:-없음})"
+    elif wake_wifi; _wk=$?; [ $_wk != 0 ]; then
+      # 칩이 없으면 HMG-API가 모드를 받지 않는다: 설치를 시도하지 않는다. 안내는 처음 한 번만 한다.
+      log "무선 모드 설치 안 함: Wi-Fi 칩을 찾지 못함"
+      if [ $_wk = 1 ]; then
+        _fail=1
+        toast "Korea Projection: 이 차에서 Wi-Fi 칩을 찾지 못해 무선 카플레이를 켤 수 없습니다. 내비를 재부팅한 뒤 Launch로 제보 파일을 만들어 보내 주세요."
+      fi
     elif ! hmgapid engine install $KP_HMG/$MOD_ID.zip > $W/mod-install.txt 2>&1; then
-      log "무선 모드 설치 실패, 다음 부팅에 다시 함 ($W/mod-install.txt)"; _fail=1
+      log "무선 모드 설치 실패, 다음 부팅에 다시 함 ($W/mod-install.txt, HMG-API 칩 기록 $([ -f $WIFI_SEEN ] && echo 있음 || echo 없음))"; _fail=1
       toast "Korea Projection: HMG-API 무선 모드를 설치하지 못했습니다. Launch에서 상태를 확인해 주세요."
     else
       : > $BK/mod.tried; : > $BK/mod.ours
@@ -596,6 +693,12 @@ main() {
     while true; do sleep 3600; done
   fi
   write_conf
+  # 확인된 차가 아니면 순정 핫스팟(다른 hostapd)이 도는 동안 시작하지 않는다(svc wifi enable이 순정 핫스팟을 끈다)
+  if ! car_in "$prod" "$CARS_OK" && stock_ap_on; then
+    log "대기: 다른 hostapd가 돌고 있음(순정 핫스팟 등)"
+    while stock_ap_on; do sleep 60 & wait $!; done
+    log "다른 hostapd가 멈춤: 시작"
+  fi
   log "시작 ($prod): softap.conf의 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   stop_ap
   # the Wi-Fi driver loads with Wi-Fi on; wpa_supplicant has to let go of wlan0 for hostapd
@@ -608,6 +711,7 @@ main() {
     sleep 30 &
     wait $!
     logrotate
+    ap_yield && continue
     if running wpa_supplicant; then
       $BB killall wpa_supplicant 2>/dev/null
       log "wpa_supplicant가 다시 켜져서 멈춤"

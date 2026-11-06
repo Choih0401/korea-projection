@@ -2,7 +2,7 @@
 
 - wireless-carplay-aa.zip: 한국 차 빌드
   - HMG-API의 "Wireless CarPlay + Android Auto" 2.1.0 모드(VysseCodes, AGPL-3.0)에, 확인된 한국 차의 지원 차 목록과 패치 세트를 더해 빌드한 것입니다.
-  - 지금 들어 있는 차: 기아 니로 하이브리드(DEPEHEV.KOR 260902, 패치 세트 depehev), 현대 쏘나타 하이브리드 DN8(DN822HEV.KOR 260902, 패치 세트 dn822hev, 시험 지원)
+  - 지금 들어 있는 차: 기아 니로 하이브리드(DEPEHEV.KOR 260902, 패치 세트 depehev), 현대 쏘나타 하이브리드 DN8(DN822HEV.KOR 260902, 패치 세트 dn822hev, 시험 지원), 현대 그랜저 하이브리드 IG(IGPEHEV.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원), 현대 벨로스터 N(JSN.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원)
   - 그 밖의 한국 차(Wi-Fi 칩이 있는 차)도 받습니다(자동 시험, 패치 세트 kor). 지도는 HMG-API가 그 차에서 만들고 확인합니다.
   - 모드 소스는 niro-carplay-build/mod-kor/(비공개 작업 폴더)에 있고, scripts/add-car.py로 서명합니다. 쏘나타 순정 체크섬은 차주 제보(HMG-API #91 Car Report)와 같습니다.
   - 원본 소스는 https://github.com/VysseCodes/HMG-API 입니다. 니로 변경분은 PR VysseCodes/HMG-API#22 에 있습니다.
@@ -12,5 +12,7 @@
   - 차주 차에서 지도 확인(verify-map)을 통과한 것만 넣습니다. 설치할 때 그 차에서 다시 지도 확인을 합니다.
   - kia/niro/kor/260902: 2026-11-05 차에서 342개 지점을 확인했습니다(PR #22와 같은 내용).
   - hyundai/sonata/kor/260902: 쏘나타 차주의 Car Report(HMG-API #91, 2026-11-05)에서 HMG-API tools/report-map.py로 만들었습니다. 그 차에서 지도 확인 342개 지점 통과(실패 0). 상태는 probed(차에서 만든 지도)이고, 무선 카플레이 동작은 아직 확인되지 않았습니다.
+  - hyundai/grandeur/kor/260902: 그랜저 하이브리드 차주의 Car Report(우리 이슈 #7, 2026-11-06)에서 같은 방법으로 만들었습니다. 그 차에서 지도 확인 342개 지점 통과. 무선 카플레이 동작은 아직 확인되지 않았습니다.
+  - hyundai/veloster-n/kor/260902: 벨로스터 N 차주의 Car Report(우리 이슈 #8, 2026-11-06)에서 같은 방법으로 만들었습니다. 그 차에서 지도 확인 342개 지점 통과. 무선 카플레이 동작은 아직 확인되지 않았습니다.
 
 새 차를 추가하는 절차는 docs/car-report-guide.md(공개 저장소)를 봅니다. HMG-API 공식판이 그 차를 지원하게 되면 공식 모드와 지도로 바꿀 예정입니다.

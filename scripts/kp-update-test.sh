@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# USB 스크립트(NEMESIS.sh, type=execute): korea.projection 1.4.3로 업데이트하고, 스토어 제출 조건인
+# USB 스크립트(NEMESIS.sh, type=execute): korea.projection 1.5.3로 업데이트하고, 스토어 제출 조건인
 # "설치 → 사용 → 삭제 → 원래 상태 복구"를 차에서 확인한다. USB를 꽂을 때마다 한 단계씩 진행한다.
 # 단계는 /data/local/tmp/kp-test7/step, 기록은 USB의 kp7/.
-#   (처음) U: 1.4.3로 업데이트 → 버전과 핫스팟 확인                    → 카플레이 써 보고 다시 꽂기
+#   (처음) U: 1.5.3로 업데이트 → 버전과 핫스팟 확인                    → 카플레이 써 보고 다시 꽂기
 #   R: 삭제 → 바로 남은 것이 없는지 확인                               → 내비 재부팅 후 다시 꽂기
 #   R2: 재시작 뒤 일반 Wi-Fi·HMG-API 파일이 원래대로인지 확인 → 다시 설치 → 확인
 #   그 뒤: 로그와 상태 수집
@@ -29,7 +29,7 @@ BK=${BK:-/data/nemesis/backup/$PKG}
 # 껐다 켜는 동안 USB가 잠깐 떨어졌다 다시 붙는 것으로 보이고, 그 뒤 USB에 쓴 기록이 사라졌다.
 O=$D/out
 UO=$U/kp7
-WANT=1.4.3
+WANT=1.5.3
 # USB가 실제로 붙어 있을 때만 복사 (빈 마운트 지점 폴더에 쓰지 않게)
 copy_out() {
   $BB grep -q " $U " ${MOUNTS:-/proc/mounts} 2>/dev/null || return 0

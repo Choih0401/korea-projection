@@ -56,7 +56,8 @@ elif [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
   echo "HMG-API 데몬 응답 없음: 무선 모드를 지우지 못함"
   modmsg=" HMG-API 앱에서 무선 모드(Wireless CarPlay + Android Auto)를 지우고 적용해 주세요."
 fi
-[ "$(cat $BK/wifi_on 2>/dev/null)" = 0 ] && svc wifi disable
+# 1이 아니면 꺼져 있던 것으로 본다(한 번도 안 켠 차는 null일 수 있다). 기록이 없으면 건드리지 않는다.
+[ -f $BK/wifi_on ] && [ "$(cat $BK/wifi_on 2>/dev/null)" != 1 ] && svc wifi disable
 rm -rf $BK
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE \
   "Korea Projection을 삭제했습니다. 내비를 재부팅하면(RESET 버튼 또는 NEMESIS 재부팅) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg" \
