@@ -12,6 +12,17 @@ umask 077
 $BB mkdir -p $W
 
 yn() { if "$@" >/dev/null 2>&1; then echo 예; else echo 아니요; fi; }
+# USB가 마운트돼 있는가 (마운트 지점 폴더는 USB가 없어도 있을 수 있어 /proc/mounts로 본다)
+USBS="/storage/usb0 /storage/usb1"
+usb_in() {
+  for _u in $USBS; do $BB grep -q " $_u " /proc/mounts 2>/dev/null && return 0; done
+  return 1
+}
+# 순정 파일 위치 (테스트에서 바꿀 수 있게)
+SYSAPP=${SYSAPP:-/system/app}
+SYSLIB=${SYSLIB:-/system/lib}
+SYSONE=${SYSONE:-/system/onebin}
+HMGSTOCK=${HMGSTOCK:-/data/hmgapi/stock}
 # NEMESIS.data의 값 하나 (이 헤드유닛에는 sed/cut/tr이 없다)
 pver() { _v=$($BB grep '^package-version=' "$1" 2>/dev/null); echo "${_v#package-version=}"; }
 
@@ -33,7 +44,8 @@ report() {
   # 따옴표 없이: 두 줄이 한 줄로 합쳐진다
   echo "- HMG-API:" $($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
   echo "- wireless.projection 설치: $(yn [ -d /data/nemesis/apps/wireless.projection ])"
-  echo "- HMG-API 무선 모드(hmgapi.wireless-carplay-aa) 목록: $(yn [ -d /data/nemesis/apps/hmgapi.wireless-carplay-aa ])"
+  echo "- HMG-API 무선 모드: 설치 $(mod_state) / 켜짐 $(mod_on_state) / 무선 카플레이 설정(bridge) $(bridge_state)"
+  echo "- HMG-API 훅(마지막 부팅 기록): $(hooks_state)"
   echo
   echo "## 무선 기능 (pm list features)"
   # 이름 뒤에 줄바꿈을 붙여 android.hardware.wifi가 ...wifi.direct와 섞이지 않게 한다
@@ -55,9 +67,28 @@ report() {
   parse_conf $SRC
   echo "- softap.conf: $(yn [ -s $SRC ]), 찾은 문자열 ${NS:-0}개, 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   echo "- 우리 hostapd: $(yn running "hostapd $CONF"), 우리 DHCP: $(yn running "$DNSMASQ")"
-  echo "- 다른 hostapd (순정 핫스폿): $(yn sh -c "$BB ps | $BB grep -v grep | $BB grep -v '$CONF' | $BB grep -q hostapd")"
+  echo "- 다른 hostapd (순정 핫스팟): $(yn sh -c "$BB ps | $BB grep -v grep | $BB grep -v '$CONF' | $BB grep -q hostapd")"
   echo "- wpa_supplicant: $(yn running wpa_supplicant)"
   echo "- 지금 카플레이 연결 수: $($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
+  echo
+  echo "## 순정 파일 체크섬 (새 차 추가용)"
+  echo "무선 모드의 패치 세트(patches/<차>/stock)를 만드는 데 씁니다. 차종·펌웨어마다 같은 값이라 개인정보가 아닙니다."
+  echo '```'
+  # 큰 apk의 md5는 몇 초 걸린다: 리포트를 USB에 남길 때만 계산해 화면이 늦게 뜨지 않게 한다
+  usb_in || echo "(USB를 꽂은 채 Launch를 누르면 채워집니다)"
+  usb_in && for f in $SYSAPP/HKMC_DiPO.apk $SYSAPP/HKMC_DiPO.odex $SYSAPP/HKMC_GPM.apk $SYSAPP/HKMC_GPM.odex \
+           $SYSAPP/HKMC_Navi_ExSL.apk $SYSAPP/HKMC_Navi_ExSL.odex $SYSAPP/Iap2ServerApp.apk $SYSAPP/Iap2ServerApp.odex \
+           $SYSLIB/libautoreceiver_infobank.so $SYSLIB/libCarPlayCore.so $SYSLIB/libCarPlayAudio.so \
+           $SYSLIB/libCarPlayUtils.so $SYSAPP/HKMC_BtSettings.apk; do
+    # 모드가 바꾼 파일은 HMG-API가 순정 원본을 /data/hmgapi/stock<경로>에 둔다(CarMap과 같은 방식): 그것을 쓴다
+    if [ -f $HMGSTOCK$f ]; then set -- $($BB md5sum < $HMGSTOCK$f); echo "${f##*/} $1 (HMG-API 순정 백업)"
+    elif [ -f $f ]; then set -- $($BB md5sum < $f); echo "${f##*/} $1"; else echo "${f##*/} 없음"; fi
+  done
+  _fx=$SYSONE/$(getprop ro.mobis.onebindir)/featurexml.cfg
+  if ! usb_in; then :
+  elif [ -f $HMGSTOCK$_fx ]; then set -- $($BB md5sum < $HMGSTOCK$_fx); echo "featurexml.cfg $1 (HMG-API 순정 백업)"
+  elif [ -f $_fx ]; then set -- $($BB md5sum < $_fx); echo "featurexml.cfg $1 (모드가 바꿨을 수 있음)"; else echo "featurexml.cfg 없음"; fi
+  echo '```'
   echo
   echo "## 서비스 로그 (ap.log 마지막 20줄)"
   echo '```'
@@ -72,6 +103,27 @@ report() {
 # /data/local/tmp 바로 아래에 둔다. 값은 예/아니요·버전·개수·길이뿐이다 (SSID, 비밀번호, 휴대폰 이름, MAC, IP 없음).
 STATUS=${STATUS:-/data/local/tmp/korea-projection-status.txt}
 yesno() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
+# HMG-API 무선 모드의 상태는 HMG-API 자기 파일로 본다(NEMESIS 목록은 wireless.projection과 충돌하면 등록되지 않고,
+# 모드를 꺼도 남는다). /data/hmgapi/mods/<id>/mod.json: 설치, .disabled: 꺼짐,
+# /data/hmgapi/settings/<id>.json의 "bridge":false: 무선 카플레이(블루투스 브리지) 설정 꺼짐 (Mods.java, settings.json)
+HMGMOD=${HMGMOD:-/data/hmgapi/mods/wireless-carplay-aa}
+HMGSET=${HMGSET:-/data/hmgapi/settings/wireless-carplay-aa.json}
+mod_state() { yesno [ -f $HMGMOD/mod.json ]; }
+# mod_on은 "꺼 두지 않았다"는 뜻일 뿐이다. HMG-API가 충돌·미지원으로 건너뛴 경우는 훅·무선 기능 값으로 드러난다.
+# bridge는 저장된 설정 값이라 Apply changes 전에는 실제 동작과 다를 수 있다.
+mod_on_state() { if [ -f $HMGMOD/mod.json ] && [ ! -f $HMGMOD/.disabled ]; then echo yes; else echo no; fi; }
+bridge_state() { if $BB grep -q '"bridge" *: *false' $HMGSET 2>/dev/null; then echo off; else echo on; fi; }
+# HMG-API가 부팅 때마다 남기는 "hook map: <상태> for …, hooks on|off" 줄 중 마지막 것 (log.log.1이 더 오래됨).
+# 출력: "on|off <상태>" (상태: none, mismatch, mapped, verified 등). 줄이 없으면 빈 값.
+# 이번 부팅의 줄을 놓치면 지난 부팅 기록일 수 있다(HMG-API 로그는 logcat에서 옮겨 적는다).
+# map-check.json은 HMG-API 업데이트로 지도가 바뀌어도 ok로 남을 수 있어 로그를 본다.
+HMGLOG=${HMGLOG:-/data/hmgapi/logs/hmgapi}
+hooks_state() {
+  $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | $BB awk '
+    /hook map: .*, hooks on/ { s = "on"; i = index($0, "hook map: "); w = substr($0, i + 10); sub(/[ ,].*/, "", w) }
+    /hook map: .*, hooks off/ { s = "off"; i = index($0, "hook map: "); w = substr($0, i + 10); sub(/[ ,].*/, "", w) }
+    END { if (s != "") print s " " w }'
+}
 status_kv() {
   _prod=$(getprop ro.build.product)
   _feats="$(pm list features 2>/dev/null)
@@ -86,7 +138,12 @@ status_kv() {
   echo "hmgapi="$($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
   echo "nemesis=$(nemesis version 2>/dev/null)"
   echo "wp=$(yesno [ -d /data/nemesis/apps/wireless.projection ])"
-  echo "mod=$(yesno [ -d /data/nemesis/apps/hmgapi.wireless-carplay-aa ])"
+  echo "mod=$(mod_state)"
+  echo "mod_on=$(mod_on_state)"
+  echo "bridge=$(bridge_state)"
+  _hk=$(hooks_state)
+  echo "hooks=${_hk%% *}"
+  echo "hookmap=${_hk#* }"
   echo "feat_carplay=$(_has com.hkmc.software.connectivity.carplay_wireless)"
   echo "feat_aa=$(_has com.hkmc.software.connectivity.androidauto_wireless)"
   echo "feat_wifi=$(_has android.hardware.wifi)"
@@ -117,7 +174,7 @@ R=$W/korea-projection-report.md
 report > $R 2>/dev/null
 $BB chmod 600 $R
 where=""
-for u in /storage/usb0 /storage/usb1; do
+for u in $USBS; do
   # 마운트 지점 폴더는 USB가 없어도 있을 수 있다: /proc/mounts로 확인
   $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB cp $R $u/korea-projection-report.md 2>/dev/null && sync && where=$u && break
 done
@@ -129,8 +186,17 @@ d=off; running "$DNSMASQ" && d=on
 c=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")
 # 켜짐/꺼짐
 [ $a = on ] && a=켜짐 || a=꺼짐; [ $d = on ] && d=켜짐 || d=꺼짐
-m="Korea Projection: 핫스폿 $a, DHCP $d, 카플레이 연결 $c개"
+m="Korea Projection: 핫스팟 $a, DHCP $d, 카플레이 연결 $c개"
 m="$m. 리포트를 USB에 저장했습니다(korea-projection-report.md)."
+# 지원 목록에 없는 차이거나 HMG-API 훅이 켜져 있지 않으면, 새 차 추가에 필요한 HMG-API Car Report도
+# 뒤에서 만들어 USB에 저장한다(1분쯤, 화면은 기다리지 않음). 끝나면 carreport.sh가 토스트로 알린다.
+_need=0
+case "$(getprop ro.build.product)" in $CARS) ;; *) _need=1 ;; esac
+_hk=$(hooks_state); [ "${_hk%% *}" = on ] || _need=1
+if [ $_need = 1 ] && command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then
+  W=$W $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
+  m="Korea Projection: 제보 자료를 USB에 저장하는 중입니다(약 1분). '이제 USB를 빼셔도 됩니다'가 뜰 때까지 꽂아 두세요."
+fi
 echo "$m"
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
   --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1

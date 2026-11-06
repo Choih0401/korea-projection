@@ -12,8 +12,9 @@
 3. **USB용 설치 파일**(`korea-projection-버전-usb.zip`) 받기
 4. 압축을 풀고 **안에 있는 것**을 USB **맨 위**에 복사 (안쪽 `korea.projection.zip`은 풀지 않기)
 5. 내비 화면이 다 뜬 뒤 USB를 꽂고 **예** 누르기
-6. USB를 빼고, 시동 끄고 → 문 열었다 닫고 → 다시 켜기
-7. 아이폰에서 무선 카플레이 연결
+6. USB를 빼고 **2~3분 기다리기** ("무선 카플레이 설정을 마쳤습니다" 안내)
+7. 시동 끄고 → 문 열었다 닫고 → 다시 켜기
+8. 아이폰에서 무선 카플레이 연결
 
 가장 많이 틀리는 곳은 **4번**입니다. 아래 [4단계](#4단계-usb에-복사하기)의 그림을 꼭 확인하세요.
 
@@ -26,6 +27,7 @@
 | 지원 차량 | 지금 확인된 차: **기아 니로 하이브리드(2020, DE PE)**, 내비 소프트웨어 `DEPEHEV.KOR.0000.V039.001.260902`. 다른 한국 차는 설치는 되지만 핫스팟을 켜지 않고 대기만 합니다([README 지원 차량](../README.md#지원-차량)) |
 | NEMESIS | 1.16 이상이 차에 설치되어 있어야 합니다. 설치 방법: [NEMESIS 안내](https://github.com/xwtk/hmg_nemesis) |
 | HMG-API | 1.0.2 이상이 차에 설치되어 있어야 합니다. 설치 방법: [HMG-API 안내](https://github.com/VysseCodes/HMG-API) |
+| HMG-API 무선 모드 | **따로 설치하지 않아도 됩니다.** 확인된 차에서는 Korea Projection 1.5부터 자동으로 설치합니다 |
 | USB 메모리 | **32GB 이하**를 쓰세요. 그보다 크면 Windows에서 FAT32로 포맷할 수 없습니다 |
 | 컴퓨터 | Windows PC 또는 Mac |
 | 아이폰 | 무선 카플레이를 지원하는 아이폰 |
@@ -65,7 +67,7 @@
 ## 3단계: 설치 파일 받기
 
 1. [최신 릴리스 페이지](https://github.com/StopDragon/korea-projection/releases/latest)를 엽니다.
-2. 아래 **Assets**에서 **`korea-projection-버전-usb.zip`**을 받습니다(예: `korea-projection-1.4.1-usb.zip`).
+2. 아래 **Assets**에서 **`korea-projection-버전-usb.zip`**을 받습니다(예: `korea-projection-1.5.1-usb.zip`).
 
 | 파일 | 누가 받나요 |
 |---|---|
@@ -95,8 +97,8 @@ USB를 열었을 때 **`NEMESIS.data`와 `packages` 폴더가 바로 보여야**
 
 | 잘못된 모양 | 왜 안 되나요 |
 |---|---|
-| `USB/korea-projection-1.4.1-usb/NEMESIS.data` | 폴더째로 넣었습니다. 차는 USB **맨 위**의 `NEMESIS.data`만 찾습니다 |
-| `USB/korea-projection-1.4.1-usb.zip` | 압축을 풀지 않았습니다 |
+| `USB/korea-projection-1.5.1-usb/NEMESIS.data` | 폴더째로 넣었습니다. 차는 USB **맨 위**의 `NEMESIS.data`만 찾습니다 |
+| `USB/korea-projection-1.5.1-usb.zip` | 압축을 풀지 않았습니다 |
 | `USB/packages/korea.projection/NEMESIS.data …` | 안쪽 `korea.projection.zip`까지 풀었습니다. 이 파일은 **zip 그대로** 있어야 합니다 |
 | `USB/korea.projection.zip` (packages 폴더 없음) | 차는 `packages/korea.projection.zip` 위치에서 찾습니다 |
 | `USB/NEMESIS.data.txt` | 이름 끝에 `.txt`가 붙었습니다. 받은 파일을 그대로 쓰세요 |
@@ -136,7 +138,11 @@ USB를 열었을 때 **`NEMESIS.data`와 `packages` 폴더가 바로 보여야**
    - 확인된 차가 아니면 경고 색으로 표시될 수 있습니다. 그래도 설치는 됩니다(설치 후 대기만 함).
 5. 설치가 끝났다는 안내가 나오면 **USB를 뺍니다.**
    - USB를 꽂아 둔 채로 두면 유선 연결을 먼저 시도해서 무선 연결이 안 될 수 있습니다.
-6. 시동을 끄고 → **문을 열었다 닫고** → 다시 켭니다. (내비가 완전히 꺼졌다 켜지게 하려는 것입니다.)
+6. **2~3분 기다립니다.** 확인된 차에서는 Korea Projection이 HMG-API 무선 모드와 그 차의 지도를 자동으로 갖춥니다.
+   - **"무선 카플레이 설정을 마쳤습니다. 차를 껐다 켜 주세요"**가 뜨면 다음으로 넘어갑니다.
+   - 이미 다 갖춰진 차(업데이트 등)에서는 이 안내 없이 바로 다음으로 넘어가도 됩니다.
+   - "HMG-API 앱에서 변경 사항을 적용…" 같은 다른 안내가 뜨면, 그 안내를 따른 뒤 다음으로 넘어갑니다.
+7. 시동을 끄고 → **문을 열었다 닫고** → 다시 켭니다. (내비가 완전히 꺼졌다 켜지게 하려는 것입니다.)
 
 ---
 
@@ -168,7 +174,7 @@ USB에 이전 파일이 있으면 **덮어쓰기**하면 됩니다. 업데이트
 | 한 번 취소했더니 다시 안 물어봄 | 같은 USB는 꽂을 때 한 번만 묻습니다. **뺐다가 다시 꽂으세요** |
 | 패키지를 찾을 수 없다는 오류 | `packages/korea.projection.zip`이 그 위치·그 이름으로 있는지, 압축을 풀어 버리지 않았는지 확인하세요 |
 | 설치는 됐는데 카플레이가 안 뜸 | ① USB를 뺐는지 ② 시동을 끄고 문을 열었다 닫은 뒤 다시 켰는지 ③ HMG-API가 설치되어 있는지 ④ Launch 상태 화면의 색 |
-| 다른 한국 차인데 안 됨 | 아직 확인되지 않은 차는 핫스팟을 켜지 않습니다. Launch 화면의 QR로 [차량 제보](https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml)를 남겨 주세요 |
+| 다른 한국 차인데 안 됨 | 아직 확인되지 않은 차는 핫스팟을 켜지 않습니다. [내 차 제보 가이드](car-report-guide.md)대로 리포트 두 개를 보내 주시면 그 차를 추가합니다 |
 | 내비가 휴대폰 핫스팟(일반 Wi-Fi)에 안 붙음 | 정상입니다. 무선 카플레이용 핫스팟이 켜져 있는 동안에는 Wi-Fi를 함께 쓸 수 없습니다 |
 
 그래도 안 되면 [이슈](https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml)로 알려 주세요. 차종, 내비 소프트웨어 버전, Launch 화면 색을 함께 적어 주시면 빨리 볼 수 있습니다.

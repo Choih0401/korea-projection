@@ -26,10 +26,34 @@ case "$(cat /proc/$PPID/cmdline 2>/dev/null)" in
     fi ;;
 esac
 remove_app
+# 1.5: 우리가 설치한 HMG-API 무선 모드만 정리한다(mod.ours). 원래 있던 모드와 지도는 그대로 둔다
+# (지도는 HMG-API의 다른 모드도 쓴다). 계획이 그 모드의 되돌리기뿐일 때만 적용하고, 아니면 앱에서 적용하라고 안내한다.
+modmsg=""
+if [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && hmgapid ping >/dev/null 2>&1; then
+  if hmgapid engine remove $MOD_ID > $BK/mod-remove.txt 2>&1; then
+    bad=0
+    hmgapid engine plan > $BK/plan.txt 2>&1 || bad=1
+    while IFS= read -r l; do
+      case "$l" in
+        "restore  "*|"setting  "*" back to stock"*|"unbind   "*|"same     "*) ;;
+        "change   "*|"update   "*|"setting  "*|"bind     "*|"problem  "*|"rebase   "*|"nothing changed"*) bad=1 ;;
+      esac
+    done < $BK/plan.txt
+    if [ $bad = 0 ] && hmgapid engine apply >/dev/null 2>&1; then
+      echo "설치했던 HMG-API 무선 모드를 지움"
+      modmsg=" 함께 설치했던 HMG-API 무선 모드도 지웠습니다."
+    else
+      echo "무선 모드를 지웠지만 적용하지 않음 (HMG-API 앱에서 적용 필요)"
+      modmsg=" HMG-API 앱에서 변경 사항을 적용해 주세요(무선 모드 삭제)."
+    fi
+  else
+    echo "무선 모드 지우기 실패"
+  fi
+fi
 [ "$(cat $BK/wifi_on 2>/dev/null)" = 0 ] && svc wifi disable
 rm -rf $BK
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE \
-  "Korea Projection을 삭제했습니다. 차를 껐다 켜면(문 열고 닫기) 일반 Wi-Fi가 원래대로 돌아옵니다." \
+  "Korea Projection을 삭제했습니다. 차를 껐다 켜면(문 열고 닫기) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg" \
   --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
 echo "korea.projection 삭제 완료"
 exit 0

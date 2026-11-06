@@ -21,12 +21,12 @@ if [ -n "$P" ] && $BB ps | $BB grep -v grep | $BB grep -q "^ *$P .*cpdrive/watch
   for p in $($BB ps | $BB grep -v grep | $BB grep "hostapd /data/misc/wifi/hostapd-cp.conf" | $BB awk '{print $1}'); do kill $p; done
   # cp-drive의 dnsmasq도 (우리 것과 명령 앞부분이 같아서 남겨 두면 우리 dnsmasq가 시작되지 않는다)
   for p in $($BB ps | $BB grep -v grep | $BB grep "dnsmasq --keep-in-foreground" | $BB awk '{print $1}'); do kill $p; done
-  echo "USB 스크립트(cp-drive.sh)의 핫스폿을 멈춤"
+  echo "USB 스크립트(cp-drive.sh)의 핫스팟을 멈춤"
 fi
 # 상태 화면 앱: 실패해도 패키지 설치는 성공으로 둔다 (Launch를 누를 때 다시 시도)
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
 if ! install_app; then
-  m="Korea Projection: 핫스폿은 정상입니다. 상태 화면 앱만 설치하지 못했습니다(Launch를 누르면 다시 시도)."
+  m="Korea Projection: 핫스팟은 정상입니다. 상태 화면 앱만 설치하지 못했습니다(Launch를 누르면 다시 시도)."
   echo "$m"
   am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1

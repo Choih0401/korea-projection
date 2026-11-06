@@ -10,6 +10,8 @@ body:
 
         **비밀번호, 차대번호(VIN), 전화번호, 휴대폰 이름은 적지 마세요.** 리포트 파일에는 들어 있지 않습니다.
 
+        **지원 목록에 없는 차라면** [내 차 제보 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md)를 따라 리포트 두 개(Korea Projection 리포트와 HMG-API Car Report)를 함께 첨부해 주세요.
+
         **리포트 만드는 방법**
         1. 차를 세운 상태에서 USB를 꽂습니다.
         2. NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누릅니다.
@@ -73,8 +75,8 @@ body:
   - type: textarea
     id: carreport
     attributes:
-      label: HMG-API Car Report (지원 목록에 없는 차만)
-      description: HMG-API 앱 → Car Report → Make report. USB의 "HMG-API reports" 폴더에 있는 .json 파일을 끌어다 놓아 주세요
+      label: HMG-API Car Report (지원 목록에 없는 차는 꼭 필요)
+      description: USB를 꽂은 채 HMG-API 앱 → Car Report → Make report. USB의 "HMG-API reports" 폴더에 있는 .json 파일을 끌어다 놓아 주세요. 이 파일로 그 차의 지도를 만듭니다
   - type: textarea
     id: notes
     attributes:
