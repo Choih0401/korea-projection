@@ -23,10 +23,19 @@ if [ -n "$P" ] && $BB ps | $BB grep -v grep | $BB grep -q "^ *$P .*cpdrive/watch
   for p in $($BB ps | $BB grep -v grep | $BB grep "dnsmasq --keep-in-foreground" | $BB awk '{print $1}'); do kill $p; done
   echo "USB 스크립트(cp-drive.sh)의 핫스팟을 멈춤"
 fi
-# 상태 화면 앱: 실패해도 패키지 설치는 성공으로 둔다 (Launch를 누를 때 다시 시도)
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
+# busybox가 없는 내비(K3 BDPE, #15): 아무것도 하지 않는다(서비스도 대기만 함). 한 번 알린다.
+if ! has_bb; then
+  m="Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다(아무것도 바꾸지 않았습니다). USB를 꽂고 Launch를 눌러 만든 제보 파일을 보내 주시거나 삭제해 주세요."
+  echo "$m"
+  am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
+    --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
+  exit 0
+fi
+# 상태 화면 앱: 실패해도 패키지 설치는 성공으로 둔다 (Launch를 누를 때 다시 시도)
+# 문구에 핫스팟 상태를 쓰지 않는다: 여기서는 앱만 본다(1.5.3까지 "핫스팟은 정상"이라 써서 #9·#15가 오해함)
 if ! install_app; then
-  m="Korea Projection: 핫스팟은 정상입니다. 상태 화면 앱만 설치하지 못했습니다(Launch를 누르면 다시 시도)."
+  m="Korea Projection: 상태 화면 앱을 설치하지 못했습니다(Launch를 누르면 다시 시도). 무선 카플레이 설정은 따로 진행됩니다."
   echo "$m"
   am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1

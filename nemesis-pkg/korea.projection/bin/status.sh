@@ -9,7 +9,7 @@ APP=${APP:-/data/nemesis/apps/korea.projection}
 HOTSPOT_LIB=1 . $APP/svc/hotspot.sh
 ISSUES=https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml
 umask 077
-$BB mkdir -p $W
+$BB mkdir -p $W 2>/dev/null
 
 yn() { if "$@" >/dev/null 2>&1; then echo 예; else echo 아니요; fi; }
 # USB가 마운트돼 있는가 (마운트 지점 폴더는 USB가 없어도 있을 수 있어 /proc/mounts로 본다)
@@ -29,6 +29,30 @@ pver() { _v=$($BB grep '^package-version=' "$1" 2>/dev/null); echo "${_v#package
 # 안의 파일: 1-report.md(이 스크립트), 2-car-report.json(carreport.sh), 3-log.txt(이 스크립트)
 RDIR=${RDIR:-KoreaProjection-report}
 APLOG=${APLOG:-/data/nemesis/logs/korea.projection/ap.log}
+# busybox가 없는 내비(K3 BDPE, #15): 보통 리포트는 못 만든다. 셸 기본 명령(grep, mkdir, ls)만으로 USB에 짧은
+# 리포트를 남긴다(제품, 플랫폼, 이 내비에 있는 명령 목록: busybox 없이 다시 만들 때 참고). 개인정보는 없다.
+if ! has_bb; then
+  _nbw=0
+  for u in /storage/usb0 /storage/usb1; do
+    grep -q " $u " /proc/mounts 2>/dev/null || continue
+    mkdir -p "$u/$RDIR" 2>/dev/null || continue
+    {
+      echo "# Korea Projection 리포트 (busybox 없는 내비)"
+      echo "- 펌웨어: $(getprop ro.build.product)"
+      echo "- 플랫폼: $(getprop ro.board.platform)"
+      echo "- 이 패키지: $(grep '^package-version=' $APP/NEMESIS.data 2>/dev/null)"
+      echo "- NEMESIS: $(nemesis version 2>/dev/null)"
+      echo; echo "## /system/bin"; ls /system/bin
+      echo; echo "## /system/xbin"; ls /system/xbin
+    } > "$u/$RDIR/1-report.md" 2>/dev/null && sync && _nbw=1 && break
+  done
+  if [ "$_nbw" = 1 ]; then
+    toast "Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다. USB의 KoreaProjection-report 폴더 파일을 제보해 주세요."
+  else
+    toast "Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다. USB를 꽂고 Launch를 다시 누르면 제보 파일을 만듭니다."
+  fi
+  exit 0
+fi
 # 표준입력의 마지막 $1줄만 내면서 휴대폰 블루투스 주소(MAC)와 IP 주소를 x로 지운다(busybox tail 대신 awk)
 lastmask() {
   # n = n + 0: 오래된 busybox awk에서 -v 값이 문자열로 비교되지 않게 숫자로 만든다
@@ -46,12 +70,24 @@ logs() {
   echo "# Korea Projection 로그 ($(date '+%Y-%m-%d %H:%M'))"
   echo "제품: $(getprop ro.build.product), 패키지 $(pver $APP/NEMESIS.data)"
   echo "휴대폰 블루투스 주소와 IP 주소는 x로 지웠습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보가 보이면 그 줄을 지워 주세요."
-  for _f in $APLOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt; do
+  for _f in $APLOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
     echo; echo "== ${_f##*/}"
     if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
   done
   echo; echo "== HMG-API 로그 (마지막 800줄)"
   $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | lastmask 800
+  echo; echo "== Wi-Fi 로그 (logcat, 마지막 300줄)"
+  wifilog
+}
+# Wi-Fi 서비스·드라이버·핫스팟 쪽 logcat(1.5.4: 그랜저 하이브리드 #12에서 핫스팟이 30초마다 끊긴 원인을 보려고).
+# 지금 logcat 버퍼에 남은 것만 본다(-d). Wi-Fi 이름·비밀번호·주변 네트워크·기기 이름이 나올 수 있는 줄은
+# 통째로 버린다(ssid, psk, pass, name, bssid, extra:가 들어간 줄. NetworkInfo의 extra:에는 SSID가 들어간다).
+# key는 버리지 않는다: hostapd의 "pairwise key handshake completed"가 연결 성공을 보여 준다. MAC·IP는 lastmask가 지운다.
+# 전역 IPv6 주소는 지우지 못한다(이 차의 핫스팟은 IPv4만 쓴다). 첨부 전에 차주가 읽어 보도록 안내문이 있다.
+WIFITAGS=' [VDIWEF]/(WifiStateMachine|WifiService|WifiController|WifiHW|WifiNative[^ (]*|SoftapController|SoftApController|wpa_supplicant|hostapd|Tethering|NetworkManagementService|CommandListener|bcmdhd|dhd) *\('
+WIFIDROP='ssid|psk|pass|name|bssid|extra:'
+wifilog() {
+  logcat -d -v time 2>/dev/null | $BB grep -E "$WIFITAGS" | $BB grep -v -i -E "$WIFIDROP" | lastmask 300
 }
 
 report() {

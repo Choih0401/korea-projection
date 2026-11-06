@@ -25,7 +25,7 @@ DNSMASQ='dnsmasq --keep-in-foreground --no-resolv --no-poll'
 #   파일로 지도를 만들고(engine map-car --write) 그 차에서 확인(verify-map)한 뒤에만 무선 모드를 적용한다.
 #   무선 모드(한국 차 빌드)도 Wi-Fi 칩이 있는 한국 차만 받는다. 결과는 제보 파일(3-log.txt)로 본다.
 CARS_OK='DEPEHEV.KOR.*.260902'
-CARS_TRY='DN822HEV.KOR.*.260902 IGPEHEV.KOR.*.260902 JSN.KOR.*.260902'
+CARS_TRY='DN822HEV.KOR.*.260902 IGPEHEV.KOR.*.260902 JSN.KOR.*.260902 IGPE.KOR.*.260902'
 CARS_AUTO='*.KOR.*'
 CARS="$CARS_OK $CARS_TRY $CARS_AUTO"
 # $1(제품명)이 $2(공백으로 나눈 패턴 목록)의 하나와 맞는가.
@@ -173,6 +173,87 @@ ap_yield() {
   return 1
 }
 
+# --- Wi-Fi 서비스가 실제로 도는 차 (1.5.4) ---
+# 기능 목록에 android.hardware.wifi가 있는 차(그랜저 하이브리드 #12, K7 #10)는 Android Wi-Fi 서비스가 살아 있다.
+# svc wifi enable 뒤 wpa_supplicant를 죽이면 Wi-Fi 서비스가 다시 띄우고, 그때 wlan0이 다시 만들어져 우리 hostapd가
+# 죽는다(2026-11-06 #12 제보: 30초마다 "wpa_supplicant가 다시 켜져서 멈춤"과 "hostapd 시작"이 반복).
+# 이 차들은 드라이버를 올린 뒤 Wi-Fi 서비스 쪽에서 Wi-Fi를 끈다(svc wifi disable). wlan0이 남아 있어야 진행한다.
+# 확인된 차(니로)는 쓰지 않는다: wireless.projection·커뮤니티 Wi-Fi 패치가 이 기능을 넣었을 수 있다(main에서 거름).
+# 기능이 없는 차(쏘나타 등)도 예전 그대로다.
+WIFI_FW=${WIFI_FW:-0}
+WLAN=${WLAN:-/sys/class/net/wlan0}
+wifi_fw() { pm list features 2>/dev/null | $BB grep -q '^feature:android\.hardware\.wifi$'; }
+# 연달아 문제가 난 회차(wpa_supplicant가 다시 뜸, wlan0 없음)가 이것을 넘으면 핫스팟을 그만둔다(끝없이 끄고 켜지 않게)
+SUPP_MAX=${SUPP_MAX:-3}
+WIFI_WAIT=${WIFI_WAIT:-9}
+ns=0
+# 대기만 한다. sleep을 뒤에서 돌리고 wait로 기다려야 TERM이 오면 바로 trap이 돈다(앞에서 돌리면 최대 1시간 늦음).
+# mode=restart: 끝내지 않는다(svcmgr가 죽은 횟수를 세지 않게)
+idle_forever() { while true; do sleep 3600 & wait $!; done; }
+# Wi-Fi 서비스 차: Wi-Fi를 끄고 wpa_supplicant가 끝나기를 잠시(최대 10초) 기다린 뒤 남은 것만 죽인다
+wifi_fw_off() {
+  svc wifi disable
+  _i=0
+  while running wpa_supplicant && [ $_i -lt 10 ]; do sleep 1; _i=$((_i+1)); done
+  $BB killall wpa_supplicant 2>/dev/null
+  sleep 2
+}
+# 시작할 때 wlan0을 hostapd에 넘긴다. 0: 넘김, 1: wlan0이 없음(Wi-Fi 서비스 차만 본다)
+take_wlan0() {
+  # 드라이버는 Wi-Fi를 켜야 올라온다
+  svc wifi enable; sleep $WIFI_WAIT
+  if [ $WIFI_FW = 1 ]; then
+    wifi_fw_off
+    [ -d $WLAN ] && return 0
+    log "Wi-Fi 서비스를 끄자 wlan0이 사라짐: 핫스팟을 켤 수 없음"
+    return 1
+  fi
+  $BB killall wpa_supplicant 2>/dev/null; sleep 2
+  return 0
+}
+# 핫스팟을 그만둘 때(Wi-Fi 서비스 차): 우리 것을 멈추고, 설치 전에 Wi-Fi가 켜져 있던 차는 다시 켜 순정 상태로 둔다.
+# $BK/wififw.gaveup을 남겨 다음 부팅부터는 Wi-Fi를 건드리지 않는다(Wi-Fi를 바꿀 때마다 USB·블루투스가 다시 시작돼
+# 유선 카플레이까지 끊길 수 있다). 기록은 패키지를 업데이트하거나 지우면 사라진다. 안내 토스트는 그때 한 번만.
+give_up_ap() {
+  stop_ap
+  $BB mkdir -p $BK
+  if [ ! -f $BK/wififw.gaveup ]; then
+    : > $BK/wififw.gaveup
+    toast "Korea Projection: 이 차에서는 무선 카플레이 핫스팟을 유지하지 못했습니다. USB를 꽂고 Launch로 제보 파일을 만들어 보내 주세요."
+  fi
+  [ -f $BK/wifi_on ] && ! wifi_was_off && svc wifi enable
+  idle_forever
+}
+# 자동 설정(fix_perms → setup_hmgapi, 부팅 120초 뒤)이 아직 할 일이 있는가: 무선 모드가 없고, 다시 하지 않기로 한
+# 기록(mod.tried, automap.bad, wifi.nochip)도 없고, wireless.projection도 없을 때. 1.5.3 그랜저IG 2.5(#2)는 서비스가
+# 2분 간격으로 다시 시작돼 자동 설정이 한 번도 돌지 못했다(재부팅 반복 추정). 그래서 설정 중임을 알린다.
+# 안내는 설치마다 한 번만($BK/setup.told): 설정이 조용히 끝나는 경로(지도 실패 기록, 순정 핫스팟 켜짐 등)에서
+# 부팅마다 뜨지 않게.
+setup_pending() {
+  [ ! -f $BK/setup.told ] && [ ! -f $HMGDATA/mods/$MOD_ID/mod.json ] && [ ! -f $BK/mod.tried ] \
+    && [ ! -f $BK/automap.bad ] && [ ! -f $BK/wifi.nochip ] && [ ! -s $BK/map.bad ] && [ ! -d $WPDIR ] \
+    && [ -d $HMGDATA/maps ] && command -v hmgapid >/dev/null 2>&1
+}
+# 30초마다 한 번: wpa_supplicant가 다시 떴으면 멈춘다.
+# Wi-Fi 서비스 차는 wlan0도 보고, 문제가 SUPP_MAX번 넘게 이어지면 그만둔다(정상인 회차가 오면 0부터 다시 센다).
+ap_tick() {
+  _sup=0; running wpa_supplicant && _sup=1
+  [ $_sup = 1 ] && log "wpa_supplicant가 다시 켜져서 멈춤"
+  if [ $WIFI_FW != 1 ]; then
+    [ $_sup = 1 ] && $BB killall wpa_supplicant 2>/dev/null
+    return 0
+  fi
+  if [ $_sup = 0 ] && [ -d $WLAN ]; then ns=0; return 0; fi
+  [ -d $WLAN ] || log "wlan0이 없음"
+  ns=$((ns+1))
+  if [ $ns -gt $SUPP_MAX ]; then
+    log "Wi-Fi 문제가 ${SUPP_MAX}번 넘게 이어짐: 핫스팟을 그만둠"
+    give_up_ap
+  fi
+  [ $_sup = 1 ] && wifi_fw_off
+  return 0
+}
+
 # 서비스가 끝날 때(TERM)와 패키지를 지울 때만: 핫스팟에 더해 뒤에서 도는 권한 파일 확인(fix_perms)도 멈춘다.
 # 시작할 때 부르는 stop_ap는 이것을 건드리지 않는다 (방금 띄운 확인 작업을 죽이지 않게)
 stop_all() {
@@ -305,7 +386,7 @@ WIFI_SEEN=${WIFI_SEEN:-$HMGDATA/public/wifi-chip}
 BK=${BK:-/data/nemesis/backup/korea.projection}
 MOD_ID=wireless-carplay-aa
 # 패키지에 든 모드 zip의 md5 (busybox 1.8.1에 sha256sum이 없다). zip을 바꾸면 함께 바꾼다.
-MOD_MD5=f33667198419b91c319ad517a5223f29
+MOD_MD5=42d4e34e2e61f94bb004ae40317642ff
 toast() {
   am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$1" \
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
@@ -657,8 +738,16 @@ remove_app() {
   rm -f $APK_COPY
 }
 
+# busybox가 없는 내비(K3 BDPE, tcc803x, #15 2026-11-06): 이 패키지의 스크립트는 busybox로 동작하므로 아무것도 하지 않는다.
+# 안내는 설치 때(post.sh) 한 번만 한다. 여기서는 로그만 남기고 대기한다(셸 기본 명령만 씀).
+has_bb() { [ -x $BB ]; }
+
 main() {
   umask 077
+  if ! has_bb; then
+    log "시작 안 함: busybox가 없음 ($BB). 이 내비는 아직 지원하지 않음"
+    idle_forever
+  fi
   $BB mkdir -p $W
   prod=$(getprop ro.build.product)
   # svc, pm, HMG-API는 Android가 다 켜진 뒤에 쓴다
@@ -678,6 +767,10 @@ main() {
   trap 'stop_all; log "멈춤"; exit 0' TERM INT HUP
   if ! try_ready "$prod"; then
     log "대기: HMG-API 무선 모드가 설치·켜짐 상태가 아님 (시험 지원 차는 모드가 있어야 핫스팟을 켬)"
+    if setup_pending; then
+      $BB mkdir -p $BK; : > $BK/setup.told
+      toast "Korea Projection: 무선 카플레이를 설정하는 중입니다. 약 5분 동안 내비를 재부팅하거나 끄지 마세요."
+    fi
     while ! try_ready "$prod"; do sleep 60 & wait $!; done
     log "무선 모드 확인됨: 시작"
   fi
@@ -690,7 +783,7 @@ main() {
   parse_conf $SRC
   if [ "${NS:-0}" -lt 4 ] || [ ${#S2} -lt 1 ] || [ ${#S4} -lt 8 ]; then
     log "시작 안 함: $SRC 에서 문자열 4개를 찾지 못함 (${NS:-0}개)"
-    while true; do sleep 3600; done
+    idle_forever
   fi
   write_conf
   # 확인된 차가 아니면 순정 핫스팟(다른 hostapd)이 도는 동안 시작하지 않는다(svc wifi enable이 순정 핫스팟을 끈다)
@@ -701,9 +794,16 @@ main() {
   fi
   log "시작 ($prod): softap.conf의 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   stop_ap
-  # the Wi-Fi driver loads with Wi-Fi on; wpa_supplicant has to let go of wlan0 for hostapd
-  svc wifi enable; sleep 9
-  $BB killall wpa_supplicant 2>/dev/null; sleep 2
+  if ! car_in "$prod" "$CARS_OK" && wifi_fw; then
+    WIFI_FW=1
+    if [ -f $BK/wififw.gaveup ]; then
+      log "대기: 이 차에서 핫스팟을 유지하지 못한 기록이 있음 (Wi-Fi를 건드리지 않음)"
+      idle_forever
+    fi
+    log "Android Wi-Fi 서비스가 있는 차: Wi-Fi 서비스를 끄고 핫스팟을 켬"
+  fi
+  # Wi-Fi 드라이버는 Wi-Fi를 켜야 올라오고, hostapd가 wlan0을 쓰려면 wpa_supplicant가 놓아야 한다
+  take_wlan0 || give_up_ap
   logstart
   up
   n=0
@@ -712,10 +812,7 @@ main() {
     wait $!
     logrotate
     ap_yield && continue
-    if running wpa_supplicant; then
-      $BB killall wpa_supplicant 2>/dev/null
-      log "wpa_supplicant가 다시 켜져서 멈춤"
-    fi
+    ap_tick
     up
     n=$((n+1))
     # once an hour: one line with the CarPlay connections

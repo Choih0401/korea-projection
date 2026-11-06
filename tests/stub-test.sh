@@ -65,6 +65,16 @@ printf '#!/bin/sh\necho "$*" > %s/toast\n' $T > $T/bin/am
 printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $T > $T/bin/ps
 printf '#!/bin/sh\necho "tcp 0 0 192.168.43.1:7000 192.168.43.23:50000 ESTABLISHED"\n' > $T/bin/netstat
 printf '#!/bin/sh\n/bin/sleep 0.01\n' > $T/bin/sleep
+cat > $T/bin/logcat <<'E'
+#!/bin/sh
+echo "11-06 20:49:35.100 D/WifiStateMachine(  500): SUP_DISCONNECTION_EVENT wlan0 a1:b2:c3:d4:e5:f6"
+echo "11-06 20:49:35.200 D/WifiStateMachine(  500): CONNECT ssid=\"MyHomeNet\""
+echo "11-06 20:49:35.300 E/hostapd ( 900): wpa_passphrase secret99"
+echo "11-06 20:49:35.400 I/wpa_supplicant( 901): p2p device name Johns phone"
+echo "11-06 20:49:35.500 I/OtherApp( 902): wifi stuff"
+echo "11-06 20:49:35.600 D/WifiStateMachine(  500): NetworkInfo: type: WIFI extra: \"MyHomeNet\""
+echo "11-06 20:49:35.700 I/hostapd ( 900): wlan0: STA xx WPA: pairwise key handshake completed (RSN)"
+E
 chmod +x $T/bin/*
 # /sbin: 맥의 md5sum 위치
 fixpath() { sed "s#^export PATH=.*#export PATH=$T/bin:/usr/bin:/bin:/sbin#" "$1"; }
@@ -377,6 +387,45 @@ check "  쏘나타: 모드를 꺼 두었으면 대기" '! tr_ DN822HEV.KOR.0000.
 rm -f $T/iap2
 check "서비스: 시험 지원 차 대기 반복은 try_ready로 끝남 (sleep 60 + wait)" 'grep -q "while ! try_ready \"\$prod\"; do sleep 60 & wait \$!; done" $T/app/svc/hotspot.sh'
 
+# --- 1.5.4: Android Wi-Fi 서비스가 있는 차 (그랜저 하이브리드 #12, K7) ---
+WF=$T/wf; mkdir -p $WF/bin
+printf '#!/bin/sh\necho "svc $*" >> %s/calls\n' $WF > $WF/bin/svc
+printf '#!/bin/sh\necho "killall $*" >> %s/calls\n' $WF > $WF/bin/killall
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $WF > $WF/bin/am
+chmod +x $WF/bin/*
+wfreset() { rm -rf $WF/calls $WF/toasts $WF/bk $WF/w $WF/wlan0 $WF/out $WF/ps; mkdir -p $WF/bk $WF/w; }
+printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $WF > $WF/bin/ps; chmod +x $WF/bin/ps
+# 대기 반복(sleep 3600 & wait)에 이르면 종료 코드 7로 끝낸다
+wf() { (PATH=$WF/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$WF/w BK=$WF/bk WLAN=$WF/wlan0 WIFI_WAIT=0 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WF'/bin:'$T'/bin:/usr/bin:/bin:/sbin; sleep() { :; }; wait() { exit 7; }; '"$1") > $WF/out 2>&1; echo $? >> $WF/out; }
+wfreset; wf 'wifi_fw && echo fw=1'
+check "Wi-Fi 서비스 차 판별: 기능 목록에 android.hardware.wifi가 있으면 예" 'grep -qx "fw=1" $WF/out'
+touch $T/nowififeat; wfreset; wf 'wifi_fw && echo fw=1'; rm -f $T/nowififeat
+check "  없으면(니로) 아니오" '! grep -q "fw=1" $WF/out'
+wfreset; wf 'WIFI_FW=0; take_wlan0'
+check "take_wlan0: 기능 없는 차(니로)는 예전처럼 켜고 wpa_supplicant만 죽임, wlan0은 보지 않음" 'grep -qx "svc wifi enable" $WF/calls && grep -qx "killall wpa_supplicant" $WF/calls && ! grep -q "svc wifi disable" $WF/calls && [ "$(tail -1 $WF/out)" = 0 ]'
+wfreset; mkdir -p $WF/wlan0; wf 'WIFI_FW=1; take_wlan0'
+check "  Wi-Fi 서비스 차: 켠 뒤 서비스 쪽에서 끄고, wlan0이 남으면 성공" '[ "$(sed -n 1p $WF/calls)" = "svc wifi enable" ] && [ "$(sed -n 2p $WF/calls)" = "svc wifi disable" ] && [ "$(tail -1 $WF/out)" = 0 ]'
+wfreset; wf 'WIFI_FW=1; take_wlan0'
+check "  Wi-Fi 서비스 차: 끄자 wlan0이 사라지면 실패로 알림" 'grep -q "wlan0이 사라짐" $WF/out && [ "$(tail -1 $WF/out)" = 1 ]'
+wfreset; echo 1 > $WF/bk/wifi_on; wf 'give_up_ap'
+check "give_up_ap: 설치 전에 Wi-Fi가 켜져 있었으면 다시 켜고, 제보 안내 토스트, 포기 기록(wififw.gaveup) 후 대기" 'grep -qx "svc wifi enable" $WF/calls && grep -q "핫스팟을 유지하지 못했습니다" $WF/toasts && [ -f $WF/bk/wififw.gaveup ] && [ "$(tail -1 $WF/out)" = 7 ]'
+rm -f $WF/toasts $WF/calls; wf 'give_up_ap'
+check "  안내는 한 번만" '[ ! -f $WF/toasts ]'
+wfreset; echo 0 > $WF/bk/wifi_on; wf 'give_up_ap'
+check "  설치 전에 꺼져 있었으면 켜지 않음" '! grep -q "svc wifi enable" $WF/calls 2>/dev/null && [ "$(tail -1 $WF/out)" = 7 ]'
+wfreset; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=0; ap_tick; echo ns=$ns'
+check "ap_tick: 기능 없는 차(니로)는 예전처럼 wpa_supplicant만 죽이고 Wi-Fi는 건드리지 않음, 그만두지 않음" 'grep -qx "killall wpa_supplicant" $WF/calls && ! grep -q "svc wifi" $WF/calls && grep -q "다시 켜져서 멈춤" $WF/out && [ "$(tail -1 $WF/out)" = 0 ]'
+wfreset; mkdir -p $WF/wlan0; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=1; ns=1; ap_tick; echo ns=$ns'
+check "  Wi-Fi 서비스 차: wpa_supplicant가 다시 뜨면 서비스 쪽에서 끄고 횟수를 셈" 'grep -qx "svc wifi disable" $WF/calls && grep -qx "ns=2" $WF/out'
+wfreset; mkdir -p $WF/wlan0; wf 'WIFI_FW=1; ns=2; ap_tick; echo ns=$ns'
+check "  정상인 회차가 오면 0부터 다시 셈" 'grep -qx "ns=0" $WF/out && [ ! -f $WF/calls ]'
+wfreset; wf 'WIFI_FW=1; ns=1; ap_tick; echo ns=$ns'
+check "  wlan0이 사라져도 문제로 셈" 'grep -q "wlan0이 없음" $WF/out && grep -qx "ns=2" $WF/out'
+wfreset; echo 0 > $WF/bk/wifi_on; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=1; ns=3; ap_tick; echo ns=$ns'
+check "  SUPP_MAX번 넘게 이어지면 Wi-Fi를 더 건드리지 않고 그만둠(포기 기록 후 대기)" 'grep -q "넘게 이어짐" $WF/out && [ -f $WF/bk/wififw.gaveup ] && ! grep -q "svc wifi" $WF/calls 2>/dev/null && [ "$(tail -1 $WF/out)" = 7 ]'
+check "서비스: 확인된 차는 Wi-Fi 서비스 방식을 쓰지 않고, 포기 기록이 있으면 Wi-Fi를 건드리지 않고 대기" 'grep -q "if ! car_in \"\$prod\" \"\$CARS_OK\" && wifi_fw; then" $T/app/svc/hotspot.sh && grep -B3 "Wi-Fi를 건드리지 않음)" $T/app/svc/hotspot.sh | grep -q "wififw.gaveup" && grep -q "take_wlan0 || give_up_ap" $T/app/svc/hotspot.sh'
+check "서비스: 트랩 뒤 대기는 sleep을 뒤에서 돌리고 wait (TERM에 바로 반응)" '! sed -n "/trap .stop_all/,\$p" $T/app/svc/hotspot.sh | grep -q "do sleep 3600; done"'
+
 # preun: 우리가 설치한 모드만 정리
 PU=$T/pu; mkdir -p $PU/bk
 sed -e "s#^BB=.*#BB=$T/bin/bb#" -e "s#^BK=.*#BK=$PU/bk#" -e "s#/data/nemesis/apps/korea.projection/svc/hotspot.sh#$T/app/svc/hotspot.sh; export PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin#" \
@@ -398,6 +447,14 @@ pureset; echo 1 > $PU/bk/wifi_on; rm -f $T/calls; pu
 check "  설치 전에 켜져 있었으면 끄지 않음" '! grep -q "svc wifi disable" $T/calls 2>/dev/null'
 pureset; rm -f $T/calls; pu
 check "  설치 전 기록이 없으면 끄지 않음" '! grep -q "svc wifi disable" $T/calls 2>/dev/null'
+printf '#!/bin/sh\necho "settings $*" >> %s/calls\ncat %s/wifiset\n' $T $X > $X/bin/settings; chmod +x $X/bin/settings
+pureset; echo 1 > $PU/bk/wifi_on; echo 0 > $X/wifiset; rm -f $T/calls; pu
+check "  설치 전에 켜져 있었는데 지금 wifi_on이 0이면(Wi-Fi 서비스 차) 값만 1로 되돌림" 'grep -qx "settings put global wifi_on 1" $T/calls && ! grep -q "svc wifi" $T/calls'
+pureset; echo 1 > $PU/bk/wifi_on; echo 1 > $X/wifiset; rm -f $T/calls; pu
+check "  지금도 1이면 건드리지 않음" '! grep -q "settings put" $T/calls 2>/dev/null'
+pureset; echo null > $PU/bk/wifi_on; echo 0 > $X/wifiset; rm -f $T/calls; pu
+check "  설치 전에 꺼져 있었으면 1로 바꾸지 않음" '! grep -q "settings put" $T/calls 2>/dev/null'
+rm -f $X/bin/settings $X/wifiset
 pureset; : > $PU/bk/mod.ours; touch $X/down; pu; rm -f $X/down
 check "  HMG-API 데몬이 응답하지 않으면 지우지 못하니 앱에서 지우라고 안내" '! grep -q "engine remove" $X/calls && grep -q "HMG-API 앱에서 무선 모드" $T/toast'
 rm -f $T/toast
@@ -545,6 +602,9 @@ check "  예전 Launch의 2-car-report.json은 지움 (새 1·3번과 섞이지 
 seq 1 1000 | sed "s/^/11-06 I\/HMG-API: line /" > $T/hlm/log.log; HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
 check "  HMG-API 로그는 마지막 800줄만" '[ "$(grep -c "line " $G3)" = 800 ] && grep -q "line 1000$" $G3 && ! grep -q "line 200$" $G3'
 check "  휴대폰 이름이 들어가는 디버그 로그(cp.log)는 넣지 않음" '! grep -q "cp.log" $G3'
+check "3-log.txt에 Wi-Fi 로그 칸: Wi-Fi 서비스 줄과 연결 성공 줄(key handshake)은 남기고 MAC은 지움" 'grep -q "^== Wi-Fi 로그" $G3 && grep -q "WifiStateMachine.*SUP_DISCONNECTION" $G3 && grep -q "wlan0 xx:xx:xx:xx:xx:xx" $G3 && grep -q "pairwise key handshake completed" $G3'
+check "  SSID·비밀번호·기기 이름이 나올 수 있는 줄과 다른 태그는 버림" '! grep -q -i -e "MyHomeNet" -e "secret99" -e "Johns" -e "OtherApp.*wifi" $G3'
+
 rm -rf $T/hlm; rm -f $T/logs/ap.log
 check "리포트에 SSID·비밀번호·폰 IP 없음" '! grep -q -e "SSID.cX" -e "PASS" -e HotspotName -e 192.168.43.23 $R'
 check "우리 hostapd 인식" 'grep -q "우리 hostapd: 예" $R'
@@ -742,6 +802,44 @@ check "kp-only-update: 업데이트만 하고 DONE (삭제 안 함)" '[ "$(urun)
 rm -f $X/usb/kp-only-update
 rm -f $X/d/step; echo 1.1 > $X/ver; rm -f $X/usb/packages/korea.projection.zip
 check "USB에 zip이 없으면 시작 안 함" '[ "$(urun)" = none ] && grep -q "시작하지 않았습니다" $X/toast'
+
+# --- 1.5.4: busybox가 없는 내비(K3 #15), 설치 문구, 설정 중 안내, 앱 설치 기록 ---
+NB=$T/nb; rm -rf $NB; mkdir -p $NB/bin $NB/bk $NB/w $NB/hd/maps
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $NB > $NB/bin/am
+printf '#!/bin/sh\necho "pm $*" >> %s/calls\necho Failure\n' $NB > $NB/bin/pm
+chmod +x $NB/bin/*
+(PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$NB/none W=$NB/w BK=$NB/bk sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$NB'/bin:'$T'/bin:/usr/bin:/bin:/sbin; wait() { exit 7; }; main') > $NB/out 2>&1; echo $? >> $NB/out
+check "서비스: busybox가 없으면 아무것도 하지 않고 로그만 남기고 대기" 'grep -q "busybox가 없음" $NB/out && [ "$(tail -1 $NB/out)" = 7 ] && [ ! -d $NB/w/x ] && ! grep -q "svc\|hostapd" $NB/out'
+# post.sh: 이 PC에는 /system/bin/busybox가 없다(그대로 busybox 없는 내비)
+sed -e "s#/data/nemesis/apps/korea.projection/svc/hotspot.sh#$T/app/svc/hotspot.sh; export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#" \
+  -e "s#^export PATH=.*#export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#" -e "s#^BK=.*#BK=$NB/bk#" -e "s#/data/local/tmp/cpdrive#$NB/cpdrive#" \
+  -e "s#/data/nemesis/apps/niro.carplay.hotspot#$NB/old#" $T/app/scripts/post.sh > $NB/post.sh
+rm -f $NB/toasts $NB/calls; (W=$NB/w APK_SRC=$NB/none.apk sh $NB/post.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "설치: busybox가 없으면 안내 토스트만 띄우고 앱 설치도 하지 않고 성공(0)으로 끝남" 'grep -q "busybox가 없어 아직 동작하지 않습니다" $NB/toasts && [ ! -f $NB/calls ] && [ "$(tail -1 $NB/out)" = 0 ]'
+sed -i '' "s#^BB=.*#BB=$T/bin/bb#" $NB/post.sh
+rm -f $NB/toasts; (W=$NB/w APK_SRC=$NB/none.apk sh $NB/post.sh) > $NB/out 2>&1
+check "  앱 설치 실패 문구는 핫스팟 상태를 말하지 않음" 'grep -q "상태 화면 앱을 설치하지 못했습니다" $NB/toasts && ! grep -q "핫스팟은 정상" $NB/toasts'
+# status.sh: busybox 없는 내비는 셸 기본 명령으로 짧은 리포트를 USB에 남김
+rm -rf $T/usb0/KoreaProjection-report; rm -f $T/toast
+(STATUS=$STF BB=$NB/none APP=$T/app SRC=$T/softap.conf W=$NB/w sh $T/st.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "Launch: busybox가 없으면 USB에 짧은 리포트(제품·플랫폼·명령 목록)만 남기고 안내" 'grep -q "busybox 없는 내비" $T/usb0/KoreaProjection-report/1-report.md && grep -q "^## /system/bin" $T/usb0/KoreaProjection-report/1-report.md && grep -q "busybox가 없어" $T/toast && [ ! -f $T/usb0/KoreaProjection-report/3-log.txt ] && [ "$(tail -1 $NB/out)" = 0 ]'
+# 앱 설치 기록이 3-log.txt에 들어감
+echo "11-06 21:00:00 pm install: Failure [INSTALL_FAILED_X]" > $T/w/app-install.log
+HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null 2>&1
+check "3-log.txt에 상태 화면 앱 설치 기록(app-install.log) 칸" 'grep -q "^== app-install.log" $G3 && grep -q "INSTALL_FAILED_X" $G3'
+rm -f $T/w/app-install.log
+# 설정 중 안내: 할 일이 남았을 때만
+sp() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$NB/w BK=$NB/bk HMGDATA=$NB/hd WPDIR=$NB/wp sh -c '. '$T'/app/svc/hotspot.sh; setup_pending'); }
+check "setup_pending: 모드가 없고 다시 하지 않기로 한 기록이 없으면 설정 중" 'sp'
+: > $NB/bk/mod.tried; check "  mod.tried가 있으면 아님" '! sp'; rm -f $NB/bk/mod.tried
+: > $NB/bk/wifi.nochip; check "  wifi.nochip이 있으면 아님" '! sp'; rm -f $NB/bk/wifi.nochip
+: > $NB/bk/automap.bad; check "  automap.bad가 있으면 아님" '! sp'; rm -f $NB/bk/automap.bad
+mkdir -p $NB/hd/mods/wireless-carplay-aa; echo '{}' > $NB/hd/mods/wireless-carplay-aa/mod.json; check "  모드가 이미 있으면 아님" '! sp'; rm -rf $NB/hd/mods
+mkdir -p $NB/wp; check "  wireless.projection이 있으면 아님" '! sp'; rm -rf $NB/wp
+echo "x 1" > $NB/bk/map.bad; check "  시험 지원 차 지도 확인 실패 기록(map.bad)이 있으면 아님" '! sp'; rm -f $NB/bk/map.bad
+: > $NB/bk/setup.told; check "  이미 한 번 안내했으면(setup.told) 아님: 부팅마다 뜨지 않음" '! sp'; rm -f $NB/bk/setup.told
+check "서비스: 무선 모드 대기에 들어갈 때 설정 중이면 한 번 기록하고 재부팅하지 말라고 안내" 'grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "if setup_pending; then" && grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "setup.told"'
+check "그랜저IG 2.5: 시험 지원 목록, 지도, 패치 세트 연결" '(HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; car_in IGPE.KOR.0000.V039.001.260902 \"\$CARS_TRY\"") && grep -q "\"IGPE.KOR.\"" $T/app/hmgapi/maps/hyundai/grandeur-gasoline/kor/260902/car.json'
 
 echo "---"
 [ $fails -eq 0 ] && echo "모두 통과" || { echo "실패 $fails개"; exit 1; }
