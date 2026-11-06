@@ -52,7 +52,7 @@ final class Report {
             return "무선 모드의 'Wireless CarPlay' 설정이 꺼져 있습니다. HMG-API 앱에서 켜고 Apply changes 후 다시 시작해 주세요.";
         if ("off".equals(get("hooks"))) return hooksOffAdvice();
         if (!yes("feat_carplay")) return "무선 카플레이 기능이 꺼져 있습니다. HMG-API 무선 모드를 확인해 주세요.";
-        if (!yes("our_ap") || !yes("our_dhcp")) return "핫스팟이 꺼져 있습니다. 차를 껐다 켠 뒤 다시 확인해 주세요.";
+        if (!yes("our_ap") || !yes("our_dhcp")) return "핫스팟이 꺼져 있습니다. 내비를 재부팅(RESET 버튼 또는 NEMESIS 재부팅)한 뒤 다시 확인해 주세요.";
         if (older(get("nemesis"), MIN_NEMESIS) != 0)
             return "NEMESIS를 " + MIN_NEMESIS + " 이상으로 업데이트해 주세요.";
         if (!"0".equals(get("cp_conn")) && !get("cp_conn").isEmpty()) return "무선 카플레이 연결됨";
@@ -77,12 +77,12 @@ final class Report {
     String hooksOffAdvice() {
         String m = get("hookmap");
         if ("mapped".equals(m))
-            return "HMG-API 훅이 꺼져 있습니다. HMG-API 앱 Settings에서 'Check the map on this car'를 누른 뒤 차를 껐다 켜 주세요.";
+            return "HMG-API 훅이 꺼져 있습니다. HMG-API 앱 Settings에서 'Check the map on this car'를 누른 뒤 내비를 재부팅해 주세요.";
         if ("none".equals(m))
             return "HMG-API에 이 차의 지도가 없어 훅이 꺼져 있습니다. QR로 제보해 주세요.";
         if ("mismatch".equals(m))
             return "HMG-API 지도가 이 차의 소프트웨어와 맞지 않아 훅이 꺼져 있습니다. QR로 제보해 주세요.";
-        return "HMG-API 훅이 꺼져 있습니다(마지막 부팅 기록). 차를 껐다 켠 뒤 다시 확인해 주세요.";
+        return "HMG-API 훅이 꺼져 있습니다(마지막 부팅 기록). 내비를 재부팅(RESET 버튼 또는 NEMESIS 재부팅)한 뒤 다시 확인해 주세요.";
     }
 
     /** status.sh의 hmgapi 값("version 1.0.2 build 180185d 2026-11-04")에서 버전만. 없으면 "" */

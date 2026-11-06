@@ -437,7 +437,7 @@ setup_hmgapi() {
       log "무선 모드 설치함"
       if ! plan_only_mod; then
         log "무선 모드 적용 안 함: 계획에 다른 변경이 있거나 훅이 꺼짐 ($W/plan.txt)"; _fail=1
-        toast "Korea Projection: 무선 모드를 설치했습니다. HMG-API 앱에서 변경 사항을 적용한 뒤 차를 껐다 켜 주세요."
+        toast "Korea Projection: 무선 모드를 설치했습니다. HMG-API 앱에서 변경 사항을 적용한 뒤 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
       elif hmgapid engine apply > $W/mod-apply.txt 2>&1; then
         log "무선 모드 적용함"; _restart=1
       else
@@ -448,9 +448,9 @@ setup_hmgapi() {
   fi
   if [ $_restart = 1 ] && [ $_fail = 0 ]; then
     if car_in "$_prod" "$CARS_OK"; then
-      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다. 차를 껐다 켜 주세요(문 열고 닫기)."
+      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
     else
-      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다(시험 중인 차). 차를 껐다 켠 뒤 되는지 제보해 주세요. 유선 카플레이까지 안 되면 Korea Projection을 삭제하세요."
+      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다(시험 중인 차). 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅). 되는지 제보해 주시고, 유선 카플레이까지 안 되면 Korea Projection을 삭제하세요."
     fi
   fi
   return 0
@@ -509,10 +509,10 @@ _fix_perms() {
   if [ ! -s $W/perms.done ]; then set +f; rm -f $W/perms.done; return 0; fi
   if ! plan_only_ours; then
     log "HMG-API apply 안 함: 계획에 다른 변경이 있음 ($W/plan.txt). HMG-API 앱에서 적용해 주세요"
-    _m="Korea Projection: 무선 카플레이 기능 파일을 복구했습니다. HMG-API 앱에서 변경 사항을 적용한 뒤 차를 껐다 켜 주세요."
+    _m="Korea Projection: 무선 카플레이 기능 파일을 복구했습니다. HMG-API 앱에서 변경 사항을 적용한 뒤 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
   elif hmgapid engine apply >/dev/null 2>&1; then
     log "HMG-API apply 완료"
-    _m="Korea Projection: 무선 카플레이 기능 파일을 복구했습니다. 차를 껐다 켜 주세요(문 열고 닫기)."
+    _m="Korea Projection: 무선 카플레이 기능 파일을 복구했습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
   else
     log "HMG-API apply 실패"
     _m="Korea Projection: 무선 카플레이 기능 파일을 복구했지만 HMG-API 적용이 실패했습니다. HMG-API 앱을 확인해 주세요."

@@ -72,7 +72,7 @@ rollback() {
     state "after putting wireless.projection back"
   } >> $O/rollback.txt 2>&1
   if [ -d ${APPS:-/data/nemesis/apps}/wireless.projection ]; then
-    toast "Korea Projection 테스트: wireless.projection을 다시 설치했습니다. 재시작되지 않으면 차를 껐다 켜 주세요."
+    toast "Korea Projection 테스트: wireless.projection을 다시 설치했습니다. 재시작되지 않으면 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
   else
     # 설치가 안 됐다: 다음에 꽂을 때 다시 시도한다
     echo "rollback-retry" > $D/step
@@ -134,7 +134,7 @@ case "$STEP" in
     hmgapid engine apply 2>&1
     state "A: after uninstall + apply"
   } >> $O/A.txt 2>&1
-  toast "Korea Projection 테스트 1단계 완료. 차를 껐다 켠 뒤(문을 열고 닫아 헤드유닛 재시작) USB를 다시 꽂아 주세요."
+  toast "Korea Projection 테스트 1단계 완료. 내비를 재부팅한 뒤(RESET 버튼 또는 NEMESIS 재부팅) USB를 다시 꽂아 주세요."
   ;;
 A|B1|B2)
   {
@@ -161,7 +161,7 @@ A|B1|B2)
       state "B: after restoring the permission files + apply"
     } >> $O/B-$STEP.txt 2>&1
     if [ -f $PERMS/$FEAT.xml ]; then
-      toast "Korea Projection 테스트: 무선 기능 파일을 되돌렸습니다. 차를 껐다 켠 뒤(문 열고 닫기) USB를 다시 꽂아 주세요."
+      toast "Korea Projection 테스트: 무선 기능 파일을 되돌렸습니다. 내비를 재부팅한 뒤(RESET 버튼 또는 NEMESIS 재부팅) USB를 다시 꽂아 주세요."
     else
       rollback
     fi

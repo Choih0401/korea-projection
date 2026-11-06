@@ -43,7 +43,9 @@ Korea Projection $VER - USB 설치 파일
    폴더째로 넣으면 안 됩니다. USB를 열었을 때 NEMESIS.data가 바로 보여야 합니다.
 3. 시동을 켜고 내비 화면이 다 뜬 뒤 USB를 꽂습니다.
 4. 설치할지 물으면 60초 안에 "예"를 누릅니다.
-5. 설치가 끝나면 USB를 빼고, 시동을 끈 뒤 문을 열었다 닫고 다시 켭니다.
+5. 설치가 끝나면 USB를 빼고 기다립니다. "설정을 마쳤습니다"가 뜨면 내비를 재부팅합니다.
+   시동만 끄면 내비가 꺼지지 않을 수 있습니다. 내비 본체의 RESET 버튼(작은 구멍)을 클립으로 누르거나,
+   NEMESIS Manager에서 재부팅을 누르세요.
 
 자세한 설명:
 https://github.com/StopDragon/korea-projection/blob/main/docs/install-guide.md

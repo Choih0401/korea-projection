@@ -59,7 +59,7 @@ fi
 [ "$(cat $BK/wifi_on 2>/dev/null)" = 0 ] && svc wifi disable
 rm -rf $BK
 am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE \
-  "Korea Projection을 삭제했습니다. 차를 껐다 켜면(문 열고 닫기) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg" \
+  "Korea Projection을 삭제했습니다. 내비를 재부팅하면(RESET 버튼 또는 NEMESIS 재부팅) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg" \
   --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
 echo "korea.projection 삭제 완료"
 exit 0
