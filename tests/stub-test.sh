@@ -18,7 +18,7 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 KSHS=$(for s in mksh ksh; do command -v $s; done)
 [ -n "$KSHS" ] || bad "구문 검사: mksh/ksh 없음"
 for f in $PKG/svc/hotspot.sh $PKG/scripts/post.sh $PKG/scripts/preun.sh $PKG/bin/status.sh \
-         $PKG/bin/carreport.sh $B/scripts/kp-update-test.sh; do
+         $PKG/bin/carreport.sh $B/scripts/kp-update-test.sh $B/scripts/kp-probe.sh; do
   for KSH in $KSHS; do check "구문 검사 $(basename $KSH): ${f#$B/}" '$KSH -n $f'; done
 done
 
@@ -207,6 +207,17 @@ for extra in "problem  /system/x [wireless-carplay-aa]" "setting  prop/x back to
   asreset; printf '%s\n' "$PLAN_OK" "$extra" > $X/plan; as > $X/out
   check "  계획에 '${extra%% *}' 줄이 있으면 적용 안 함" '! grep -qx "hmgapid engine apply" $X/calls'
 done
+asp() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi SDIO=$X/nosdio PROG=$X/prog P_ON=1 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
+asreset; rm -f $X/prog; asp > $X/out
+check "진행 기록: 무선 모드를 설치·적용하면 100% 재부팅 필요" 'grep -qx "pct=100" $X/prog && grep -qx "state=reboot" $X/prog && grep -q "^stage=무선 카플레이 설정을 마쳤습니다" $X/prog'
+asreset; rm -f $X/prog; touch $X/inst_fail; asp > $X/out; rm -f $X/inst_fail
+check "  설치에 실패하면 100% 실패, 사유는 그 안내 문구" 'grep -qx "state=fail" $X/prog && grep -q "^stage=HMG-API 무선 모드를 설치하지 못했습니다" $X/prog'
+asreset; rm -f $X/prog; mkdir -p $X/hd/maps/kia/niro/kor/260902; echo '{}' > $X/hd/maps/kia/niro/kor/260902/car.json; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out
+check "  무선 모드가 있지만 적용되지 않았으면 그 사유(앱에서 켜고 적용)로 실패" 'grep -qx "state=fail" $X/prog && grep -q "^stage=HMG-API 무선 모드가 있지만 꺼져 있거나 적용되지 않았습니다" $X/prog'
+asreset; rm -f $X/prog; echo TESTX.KOR.0000.V001.001.250101 > $T/product; echo "  77 1010 hostapd /data/misc/wifi/hostapd.conf" > $T/ps; asp > $X/out; rm -f $T/product $T/ps
+check "  순정 핫스팟이 켜져 있어 건너뛰면 그 사유로 표시" 'grep -qx "state=fail" $X/prog && grep -q "^stage=순정 핫스팟이 켜져 있어" $X/prog'
+asreset; rm -f $X/prog; echo TESTX.USA.0000.V001.001.250101 > $T/product; asp > $X/out; rm -f $T/product
+check "  지원하지 않는 차(해외)는 바로 실패로 끝남(진행 중으로 남지 않음)" 'grep -qx "state=fail" $X/prog && grep -q "^stage=지원하지 않는 차" $X/prog'
 asreset; touch $X/inst_fail; as > $X/out
 check "모드 설치 실패 → 안내, 우리 것 표시 없음, 적용 안 함" 'grep -q "설치하지 못했습니다" $T/toast && [ ! -f $X/bk/mod.ours ] && ! grep -q "engine apply" $X/calls'
 rm -f $X/inst_fail $X/calls; as > $X/out
@@ -387,43 +398,68 @@ check "  쏘나타: 모드를 꺼 두었으면 대기" '! tr_ DN822HEV.KOR.0000.
 rm -f $T/iap2
 check "서비스: 시험 지원 차 대기 반복은 try_ready로 끝남 (sleep 60 + wait)" 'grep -q "while ! try_ready \"\$prod\"; do sleep 60 & wait \$!; done" $T/app/svc/hotspot.sh'
 
-# --- 1.5.4: Android Wi-Fi 서비스가 있는 차 (그랜저 하이브리드 #12, K7) ---
+# --- 1.5.5: Wi-Fi 잠금 (설정 파일 root 소유 + crc32 치움, 니로에서 검증된 상태) ---
 WF=$T/wf; mkdir -p $WF/bin
-printf '#!/bin/sh\necho "svc $*" >> %s/calls\n' $WF > $WF/bin/svc
+# svc wifi enable은 (설정 파일이 없으면) Wi-Fi 서비스처럼 system:wifi 소유 파일과 crc32를 만든다
+cat > $WF/bin/svc <<E
+#!/bin/sh
+echo "svc \$*" >> $WF/calls
+if [ "\$2" = enable ] && [ ! -f $WF/wifi/wpa_supplicant.conf ]; then
+  echo "ctrl_interface=wlan0" > $WF/wifi/wpa_supplicant.conf; echo 1000:1010 > $WF/wifi/wpa_supplicant.conf.owner
+  echo crc > $WF/wifi/wpa_supplicant_crc32.conf; echo 1000:1010 > $WF/wifi/wpa_supplicant_crc32.conf.owner
+fi
+E
 printf '#!/bin/sh\necho "killall $*" >> %s/calls\n' $WF > $WF/bin/killall
 printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $WF > $WF/bin/am
+printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $WF > $WF/bin/ps
+cat > $WF/bin/chown <<E
+#!/bin/sh
+echo "chown \$*" >> $WF/calls
+echo "\$1" > "\$2.owner"
+E
+cat > $WF/bin/ls <<E
+#!/bin/sh
+if [ "\$1" = -ln ]; then
+  case "\$2" in $WF/*)
+    [ -e "\$2" ] || exit 1
+    o=\$(cat "\$2.owner" 2>/dev/null || echo 0:0); echo "-rw-rw----    1 \${o%%:*}        \${o#*:}              88 Nov  2 17:25 \$2"; exit 0 ;;
+  esac
+fi
+exec /bin/ls "\$@"
+E
 chmod +x $WF/bin/*
-wfreset() { rm -rf $WF/calls $WF/toasts $WF/bk $WF/w $WF/wlan0 $WF/out $WF/ps; mkdir -p $WF/bk $WF/w; }
-printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $WF > $WF/bin/ps; chmod +x $WF/bin/ps
-# 대기 반복(sleep 3600 & wait)에 이르면 종료 코드 7로 끝낸다
-wf() { (PATH=$WF/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$WF/w BK=$WF/bk WLAN=$WF/wlan0 WIFI_WAIT=0 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WF'/bin:'$T'/bin:/usr/bin:/bin:/sbin; sleep() { :; }; wait() { exit 7; }; '"$1") > $WF/out 2>&1; echo $? >> $WF/out; }
-wfreset; wf 'wifi_fw && echo fw=1'
-check "Wi-Fi 서비스 차 판별: 기능 목록에 android.hardware.wifi가 있으면 예" 'grep -qx "fw=1" $WF/out'
-touch $T/nowififeat; wfreset; wf 'wifi_fw && echo fw=1'; rm -f $T/nowififeat
-check "  없으면(니로) 아니오" '! grep -q "fw=1" $WF/out'
-wfreset; wf 'WIFI_FW=0; take_wlan0'
-check "take_wlan0: 기능 없는 차(니로)는 예전처럼 켜고 wpa_supplicant만 죽임, wlan0은 보지 않음" 'grep -qx "svc wifi enable" $WF/calls && grep -qx "killall wpa_supplicant" $WF/calls && ! grep -q "svc wifi disable" $WF/calls && [ "$(tail -1 $WF/out)" = 0 ]'
-wfreset; mkdir -p $WF/wlan0; wf 'WIFI_FW=1; take_wlan0'
-check "  Wi-Fi 서비스 차: 켠 뒤 서비스 쪽에서 끄고, wlan0이 남으면 성공" '[ "$(sed -n 1p $WF/calls)" = "svc wifi enable" ] && [ "$(sed -n 2p $WF/calls)" = "svc wifi disable" ] && [ "$(tail -1 $WF/out)" = 0 ]'
-wfreset; wf 'WIFI_FW=1; take_wlan0'
-check "  Wi-Fi 서비스 차: 끄자 wlan0이 사라지면 실패로 알림" 'grep -q "wlan0이 사라짐" $WF/out && [ "$(tail -1 $WF/out)" = 1 ]'
-wfreset; echo 1 > $WF/bk/wifi_on; wf 'give_up_ap'
-check "give_up_ap: 설치 전에 Wi-Fi가 켜져 있었으면 다시 켜고, 제보 안내 토스트, 포기 기록(wififw.gaveup) 후 대기" 'grep -qx "svc wifi enable" $WF/calls && grep -q "핫스팟을 유지하지 못했습니다" $WF/toasts && [ -f $WF/bk/wififw.gaveup ] && [ "$(tail -1 $WF/out)" = 7 ]'
-rm -f $WF/toasts $WF/calls; wf 'give_up_ap'
-check "  안내는 한 번만" '[ ! -f $WF/toasts ]'
-wfreset; echo 0 > $WF/bk/wifi_on; wf 'give_up_ap'
-check "  설치 전에 꺼져 있었으면 켜지 않음" '! grep -q "svc wifi enable" $WF/calls 2>/dev/null && [ "$(tail -1 $WF/out)" = 7 ]'
-wfreset; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=0; ap_tick; echo ns=$ns'
-check "ap_tick: 기능 없는 차(니로)는 예전처럼 wpa_supplicant만 죽이고 Wi-Fi는 건드리지 않음, 그만두지 않음" 'grep -qx "killall wpa_supplicant" $WF/calls && ! grep -q "svc wifi" $WF/calls && grep -q "다시 켜져서 멈춤" $WF/out && [ "$(tail -1 $WF/out)" = 0 ]'
-wfreset; mkdir -p $WF/wlan0; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=1; ns=1; ap_tick; echo ns=$ns'
-check "  Wi-Fi 서비스 차: wpa_supplicant가 다시 뜨면 서비스 쪽에서 끄고 횟수를 셈" 'grep -qx "svc wifi disable" $WF/calls && grep -qx "ns=2" $WF/out'
-wfreset; mkdir -p $WF/wlan0; wf 'WIFI_FW=1; ns=2; ap_tick; echo ns=$ns'
-check "  정상인 회차가 오면 0부터 다시 셈" 'grep -qx "ns=0" $WF/out && [ ! -f $WF/calls ]'
-wfreset; wf 'WIFI_FW=1; ns=1; ap_tick; echo ns=$ns'
-check "  wlan0이 사라져도 문제로 셈" 'grep -q "wlan0이 없음" $WF/out && grep -qx "ns=2" $WF/out'
-wfreset; echo 0 > $WF/bk/wifi_on; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'WIFI_FW=1; ns=3; ap_tick; echo ns=$ns'
-check "  SUPP_MAX번 넘게 이어지면 Wi-Fi를 더 건드리지 않고 그만둠(포기 기록 후 대기)" 'grep -q "넘게 이어짐" $WF/out && [ -f $WF/bk/wififw.gaveup ] && ! grep -q "svc wifi" $WF/calls 2>/dev/null && [ "$(tail -1 $WF/out)" = 7 ]'
-check "서비스: 확인된 차는 Wi-Fi 서비스 방식을 쓰지 않고, 포기 기록이 있으면 Wi-Fi를 건드리지 않고 대기" 'grep -q "if ! car_in \"\$prod\" \"\$CARS_OK\" && wifi_fw; then" $T/app/svc/hotspot.sh && grep -B3 "Wi-Fi를 건드리지 않음)" $T/app/svc/hotspot.sh | grep -q "wififw.gaveup" && grep -q "take_wlan0 || give_up_ap" $T/app/svc/hotspot.sh'
+WC=$WF/wifi/wpa_supplicant.conf; WR=$WF/wifi/wpa_supplicant_crc32.conf
+wfreset() { rm -rf $WF/calls $WF/toasts $WF/bk $WF/w $WF/wlan0 $WF/out $WF/ps $WF/wifi $WF/prog; mkdir -p $WF/bk $WF/w $WF/wifi $WF/wlan0; }
+wfsys() { echo "ctrl_interface=wlan0" > $WC; echo 1000:1010 > $WC.owner; echo crc > $WR; echo 1000:1010 > $WR.owner; }
+wf() { (PATH=$WF/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$WF/w BK=$WF/bk WLAN=$WF/wlan0 WCONF=$WC WIFI_WAIT=0 PROG=$WF/prog BOOT_ID=$WF/bootid sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WF'/bin:'$T'/bin:/usr/bin:/bin:/sbin; sleep() { :; }; wait() { exit 7; }; '"$1") > $WF/out 2>&1; echo $? >> $WF/out; }
+wfreset; wfsys; wf 'wifi_lock; echo rc=$?'
+check "Wi-Fi 잠금: system:wifi 설정 파일을 root 소유(660)로, crc32 파일은 백업 뒤 치움, 원래 소유자 기록" '[ "$(cat $WC.owner)" = 0:0 ] && [ ! -e $WR ] && [ "$(cat $WF/bk/wpaconf.orig)" = "1000:1010 660" ] && [ "$(cat $WF/bk/wpacrc.bak)" = crc ] && grep -qx "rc=0" $WF/out && grep -q "Wi-Fi 잠금: 설정 파일을 root 소유로" $WF/out'
+wfsys; wf 'wifi_lock; echo rc=$?'
+check "  Wi-Fi 서비스가 파일을 새로 만들어도 다시 잠그고, 원래 기록은 덮어쓰지 않음" '[ "$(cat $WC.owner)" = 0:0 ] && [ ! -e $WR ] && [ "$(cat $WF/bk/wpaconf.orig)" = "1000:1010 660" ]'
+wf 'wifi_lock; echo rc=$?'
+check "  이미 잠겨 있으면 아무것도 하지 않음(로그 없음)" 'grep -qx "rc=0" $WF/out && ! grep -q "Wi-Fi 잠금" $WF/out'
+wfreset; wf 'wifi_lock; echo rc=$?'
+check "  설정 파일이 아직 없으면 1(Wi-Fi 서비스가 처음 켤 때 만든다)" 'grep -qx "rc=1" $WF/out && [ ! -e $WF/bk/wpaconf.orig ]'
+wfreset; wfsys; wf 'wifi_lock; wifi_unlock'
+check "  되돌리기(preun): 원래 소유자(1000:1010)와 crc32 파일(내용·소유자)" '[ "$(cat $WC.owner)" = 1000:1010 ] && [ "$(cat $WR)" = crc ] && [ "$(cat $WR.owner)" = 1000:1010 ]'
+wfreset; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'take_wlan0'
+check "take_wlan0: 파일이 없던 차는 Wi-Fi를 켠 뒤 잠그고, wpa_supplicant를 한 번 멈춤(svc wifi disable 없음)" '[ "$(sed -n 1p $WF/calls)" = "svc wifi enable" ] && [ "$(cat $WC.owner)" = 0:0 ] && grep -qx "killall wpa_supplicant" $WF/calls && ! grep -q "svc wifi disable" $WF/calls'
+wfreset; wfsys; wf 'take_wlan0'
+check "  파일이 있던 차는 켜기 전에 잠금" '[ "$(sed -n 1p $WF/calls)" = "chown 0:0 $WC" ] && grep -qx "svc wifi enable" $WF/calls'
+wfreset; wfsys; echo "  9 1010 wpa_supplicant -iwlan0" > $WF/ps; wf 'ns=0; ap_tick; ap_tick; ap_tick; ap_tick; echo ns=$ns'
+check "ap_tick: 잠금을 지키고, wpa_supplicant가 다시 뜨면 멈춤. SUPP_MAX번 넘게 이어지면 한 번만 알리고 계속(그만두지 않음)" '[ "$(cat $WC.owner)" = 0:0 ] && [ "$(grep -c "^killall wpa_supplicant" $WF/calls)" = 4 ] && grep -qx "ns=4" $WF/out && [ "$(grep -c "자꾸 끊깁니다" $WF/toasts)" = 1 ] && [ -f $WF/bk/wifilock.told ] && [ "$(tail -1 $WF/out)" = 0 ]'
+: > $WF/ps; wf 'ns=3; ap_tick; echo ns=$ns'
+check "  wpa_supplicant가 없으면 0부터 다시 셈" 'grep -qx "ns=0" $WF/out'
+echo boot-1 > $WF/bootid; wfreset; echo boot-1 > $WF/bootid; wf 'prog 40 run "지도"; P_ON=0; ptrack 90 run "안 씀"'
+check "진행 기록: pct·state·stage·boot를 644로 쓰고, P_ON=0이면 ptrack은 쓰지 않음" 'grep -qx "pct=40" $WF/prog && grep -qx "state=run" $WF/prog && grep -qx "stage=지도" $WF/prog && grep -qx "boot=boot-1" $WF/prog && [ "$(stat -f %Lp $WF/prog)" = 644 ]'
+wf 'prog 100 reboot "재부팅"; prog_final_this_boot && echo final=1; echo other > '$WF'/bootid; prog_final_this_boot || echo final=0'
+check "  같은 부팅의 재부팅 필요·실패 기록은 '이미 끝남'으로 알아봄(다른 부팅 기록은 아님)" 'grep -qx "final=1" $WF/out && grep -qx "final=0" $WF/out'
+echo boot-1 > $WF/bootid; wf 'prog 30 run "진행"; stop_all; cat '$WF'/prog'
+check "  서비스가 설치 중에 멈추면 '중간에 멈춤' 실패로 남김" 'grep -qx "state=fail" $WF/prog && grep -q "중간에 멈췄습니다" $WF/prog'
+wfreset; wfsys; echo bad > $WC.owner; wf 'wifi_lock; wifi_lock; wifi_lock; true'
+check "  잠금 실패 로그는 부팅마다 한 번만" '[ "$(grep -c "Wi-Fi 잠금 실패" $WF/out)" = 1 ]'
+check "차에 없는 printf를 busybox 없이 부르지 않음(awk 안의 printf \"%…와 주석 제외)" '[ -z "$(grep -n "printf " $PKG/svc/hotspot.sh $PKG/bin/status.sh $PKG/bin/carreport.sh $PKG/scripts/post.sh $PKG/scripts/preun.sh $B/scripts/kp-wifi-diag.sh $B/scripts/kp-sys-restore.sh | grep -v "BB printf" | grep -v "printf \"%" | grep -v -E "^[^:]+:[0-9]+:[[:space:]]*#")" ]'
+check "서비스: 1.5.4의 'Wi-Fi 끄기' 방식은 없음(드라이버를 내려 #17에서 실패)" '! grep -q -e "svc wifi disable; _i" -e "give_up_ap" -e "WIFI_FW" $T/app/svc/hotspot.sh'
 check "서비스: 트랩 뒤 대기는 sleep을 뒤에서 돌리고 wait (TERM에 바로 반응)" '! sed -n "/trap .stop_all/,\$p" $T/app/svc/hotspot.sh | grep -q "do sleep 3600; done"'
 
 # preun: 우리가 설치한 모드만 정리
@@ -441,6 +477,9 @@ pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/x (stock)" "change
 check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $T/toast'
 pureset; : > $PU/bk/mod.ours; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data; pu; rm -rf $PU/stage
 check "  업데이트 중(staging에 새 버전)에는 모드를 지우지 않음" '! grep -q "engine remove" $X/calls'
+pureset; echo "1000:1010 660" > $PU/bk/wpaconf.orig; mkdir -p $PU/wifi; echo x > $PU/wifi/c.conf; echo 0:0 > $PU/wifi/c.conf.owner; rm -f $T/calls
+cp $WF/bin/chown $X/bin/chown; (HMGDATA=$X/hd W=$PU/w WCONF=$PU/wifi/c.conf sh $PU/preun.sh) > $PU/out 2>&1; rm -f $X/bin/chown
+check "삭제: Wi-Fi 잠금을 원래 소유자로 되돌림" '[ "$(cat $PU/wifi/c.conf.owner)" = 1000:1010 ] && grep -q "Wi-Fi 잠금 되돌림" $PU/out'
 pureset; echo null > $PU/bk/wifi_on; rm -f $T/calls; pu
 check "삭제: 설치 전 Wi-Fi 값이 null(한 번도 안 켬)이면 Wi-Fi를 끔" 'grep -qx "svc wifi disable" $T/calls'
 pureset; echo 1 > $PU/bk/wifi_on; rm -f $T/calls; pu
@@ -808,21 +847,65 @@ NB=$T/nb; rm -rf $NB; mkdir -p $NB/bin $NB/bk $NB/w $NB/hd/maps
 printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $NB > $NB/bin/am
 printf '#!/bin/sh\necho "pm $*" >> %s/calls\necho Failure\n' $NB > $NB/bin/pm
 chmod +x $NB/bin/*
+# toolbox만 있는 PATH(K3 탐사로 확인한 명령만): 차에 없는 printf·awk·sed·head·tail·stat을 부르면 "not found"가 난다
+mkdir -p $NB/tb
+for c in cp mv rm mkdir chmod ls cat grep date sleep sync; do ln -sf "$(command -v $c)" $NB/tb/$c; done
+cp $NB/bin/am $NB/bin/pm $NB/tb/
+printf '#!/bin/sh\ncase "$1" in sys.boot_completed) echo 1 ;; *) echo TEST ;; esac\n' > $NB/tb/getprop
+printf '#!/bin/sh\necho "setprop $*" >> %s/setprop.log\n' $NB > $NB/tb/setprop
+chmod +x $NB/tb/*
+echo boot-1 > $NB/bootid
+TB="$NB/tb"
 (PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$NB/none W=$NB/w BK=$NB/bk sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$NB'/bin:'$T'/bin:/usr/bin:/bin:/sbin; wait() { exit 7; }; main') > $NB/out 2>&1; echo $? >> $NB/out
 check "서비스: busybox가 없으면 아무것도 하지 않고 로그만 남기고 대기" 'grep -q "busybox가 없음" $NB/out && [ "$(tail -1 $NB/out)" = 7 ] && [ ! -d $NB/w/x ] && ! grep -q "svc\|hostapd" $NB/out'
 # post.sh: 이 PC에는 /system/bin/busybox가 없다(그대로 busybox 없는 내비)
 sed -e "s#/data/nemesis/apps/korea.projection/svc/hotspot.sh#$T/app/svc/hotspot.sh; export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#" \
   -e "s#^export PATH=.*#export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#" -e "s#^BK=.*#BK=$NB/bk#" -e "s#/data/local/tmp/cpdrive#$NB/cpdrive#" \
-  -e "s#/data/nemesis/apps/niro.carplay.hotspot#$NB/old#" $T/app/scripts/post.sh > $NB/post.sh
-rm -f $NB/toasts $NB/calls; (W=$NB/w APK_SRC=$NB/none.apk sh $NB/post.sh) > $NB/out 2>&1; echo $? >> $NB/out
-check "설치: busybox가 없으면 안내 토스트만 띄우고 앱 설치도 하지 않고 성공(0)으로 끝남" 'grep -q "busybox가 없어 아직 동작하지 않습니다" $NB/toasts && [ ! -f $NB/calls ] && [ "$(tail -1 $NB/out)" = 0 ]'
+  -e "s#/data/nemesis/apps/niro.carplay.hotspot#$NB/old#" -e "s#^W=.*#W=$NB/w#" $T/app/scripts/post.sh > $NB/post.sh
+echo apk > $NB/fake.apk
+sed -e "s#^export PATH=.*#export PATH=$TB#" -e "s#; export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#; export PATH=$TB#" $NB/post.sh > $NB/post-tb.sh
+rm -f $NB/toasts $NB/calls $NB/w/app-install.log $NB/setprop.log; (W=$NB/w APK_SRC=$NB/fake.apk APK_COPY=$NB/copy.apk /bin/sh $NB/post-tb.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "설치: busybox가 없으면 무선 설정 없이 '아직 동작하지 않습니다(지원 조사 중)' 안내, 성공(0)으로 끝남" 'grep -q "아직 동작하지 않습니다(지원 조사 중)" $NB/toasts && ! grep -q busybox $NB/toasts && [ "$(tail -1 $NB/out)" = 0 ]'
+check "  1.5.5: busybox가 없어도 상태 화면 앱은 toolbox 명령으로 설치를 시도하고 결과를 남김(실패해도 성공)" 'grep -q "^pm install -r $NB/copy.apk" $NB/calls && grep -q "pm install: Failure" $NB/w/app-install.log && [ -f $NB/copy.apk ]'
+check "  toolbox 명령만으로 끝남(not found 없음), 부팅 완료 표시를 0으로 내렸다가 1로 되돌림" '! grep -q "not found" $NB/out && [ "$(cat $NB/setprop.log)" = "$(printf "setprop sys.boot_completed 0\nsetprop sys.boot_completed 1")" ]'
+rm -f $NB/toasts $NB/calls; (W=$NB/w APK_SRC=$NB/none.apk APK_COPY=$NB/copy2.apk /bin/sh $NB/post-tb.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "  앱 파일이 없어도 설치는 성공(0), pm을 부르지 않음" '[ "$(tail -1 $NB/out)" = 0 ] && ! grep -q "pm install" $NB/calls 2>/dev/null'
 sed -i '' "s#^BB=.*#BB=$T/bin/bb#" $NB/post.sh
 rm -f $NB/toasts; (W=$NB/w APK_SRC=$NB/none.apk sh $NB/post.sh) > $NB/out 2>&1
 check "  앱 설치 실패 문구는 핫스팟 상태를 말하지 않음" 'grep -q "상태 화면 앱을 설치하지 못했습니다" $NB/toasts && ! grep -q "핫스팟은 정상" $NB/toasts'
 # status.sh: busybox 없는 내비는 셸 기본 명령으로 짧은 리포트를 USB에 남김
 rm -rf $T/usb0/KoreaProjection-report; rm -f $T/toast
-(STATUS=$STF BB=$NB/none APP=$T/app SRC=$T/softap.conf W=$NB/w sh $T/st.sh) > $NB/out 2>&1; echo $? >> $NB/out
-check "Launch: busybox가 없으면 USB에 짧은 리포트(제품·플랫폼·명령 목록)만 남기고 안내" 'grep -q "busybox 없는 내비" $T/usb0/KoreaProjection-report/1-report.md && grep -q "^## /system/bin" $T/usb0/KoreaProjection-report/1-report.md && grep -q "busybox가 없어" $T/toast && [ ! -f $T/usb0/KoreaProjection-report/3-log.txt ] && [ "$(tail -1 $NB/out)" = 0 ]'
+rm -f $STF $NB/calls $NB/toasts $NB/setprop.log $NB/w/app-try
+# 앞의 Car Report 테스트가 뒤에서 같은 USB 폴더에 쓰는 중일 수 있다(가끔 실패): 끝날 때까지 기다린다
+i=0; while { [ -d $T/w/carreport.lock ] || [ -d $CR/w/carreport.lock ]; } && [ $i -lt 100 ]; do /bin/sleep 0.2; i=$((i+1)); done
+PV=$(grep '^package-version=' $PKG/NEMESIS.data); PV=${PV#package-version=}
+cp $PKG/NEMESIS.data $T/app/NEMESIS.data
+# status.sh가 읽어 들이는 hotspot.sh가 PATH를 $T/bin으로 다시 정하므로, 그 뒤에 이 구역의 pm·am이 먼저 오게 한다
+sed -e "s#^export PATH=.*#export PATH=$TB#" -e "s#^\(HOTSPOT_LIB=1 \. .*hotspot\.sh\)\$#\1; export PATH=$TB#" $T/st.sh > $NB/st.sh
+(STATUS=$STF BB=$NB/none BOOT_ID=$NB/bootid APP=$T/app SRC=$T/softap.conf W=$NB/w APK_SRC=$NB/fake.apk APK_COPY=$NB/copy3.apk /bin/sh $NB/st.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "Launch: busybox가 없으면 USB에 짧은 리포트(제품·플랫폼·명령 목록)만 남김" 'grep -q "busybox 없는 내비" $T/usb0/KoreaProjection-report/1-report.md && grep -q "^## /system/bin" $T/usb0/KoreaProjection-report/1-report.md && [ ! -f $T/usb0/KoreaProjection-report/3-log.txt ] && [ "$(tail -1 $NB/out)" = 0 ]'
+check "  1.5.5: 앱이 읽을 짧은 상태 파일(support=nobb, usb=saved, 버전) 644" 'grep -q "^support=nobb$" $STF && grep -q "^usb=saved$" $STF && grep -qx "pkgver=$PV" $STF && grep -q "^made=" $STF && [ "$(stat -f %Lp $STF)" = 644 ]'
+check "  앱이 없으면 다시 설치를 시도하고, 화면을 못 띄우므로 토스트로 안내" 'grep -q "^pm install -r $NB/copy3.apk" $NB/calls && grep -q "아직 동작하지 않습니다(지원 조사 중)" $NB/toasts'
+check "  toolbox 명령만으로 끝남: 오류 줄 없음(NEMESIS가 화면에 띄움)" '! grep -q "not found" $NB/out && [ ! -f $STF.tmp ]'
+(STATUS=$STF BB=$NB/none BOOT_ID=$NB/bootid APP=$T/app SRC=$T/softap.conf W=$NB/w APK_SRC=$NB/fake.apk APK_COPY=$NB/copy3.apk /bin/sh $NB/st.sh) > /dev/null 2>&1
+check "  Launch를 두 번 눌러도 앱 재설치(부팅 완료 표시 0→1)는 한 부팅에 한 번" '[ "$(grep -c "boot_completed 0" $NB/setprop.log)" = 1 ] && [ "$(grep -c "^pm install" $NB/calls)" = 1 ]'
+echo boot-2 > $NB/bootid
+(STATUS=$STF BB=$NB/none BOOT_ID=$NB/bootid APP=$T/app SRC=$T/softap.conf W=$NB/w APK_SRC=$NB/fake.apk APK_COPY=$NB/copy3.apk /bin/sh $NB/st.sh) > /dev/null 2>&1
+check "  다음 부팅에는 다시 시도" '[ "$(grep -c "^pm install" $NB/calls)" = 2 ]'
+rm -rf $T/usb0/KoreaProjection-report; rm -f $NB/toasts
+mkdir -p $NB/bin2; cp $NB/bin/am $NB/bin2/am
+printf '#!/bin/sh\necho "pm $*" >> %s/calls\ncase "$1" in path) echo package:/data/app/x.apk ;; *) echo Success ;; esac\n' $NB > $NB/bin2/pm; chmod +x $NB/bin2/pm
+sed -e "s#^export PATH=.*#export PATH=$NB/bin2:$T/bin:/usr/bin:/bin:/sbin#" -e "s#^\(HOTSPOT_LIB=1 \. .*hotspot\.sh\)\$#\1; export PATH=$NB/bin2:$T/bin:/usr/bin:/bin:/sbin#" $T/st.sh > $NB/st2.sh
+mv $T/mounts $T/mounts.keep; rm -f $NB/calls
+(STATUS=$STF BB=$NB/none APP=$T/app SRC=$T/softap.conf W=$NB/w sh $NB/st2.sh) > $NB/out 2>&1
+mv $T/mounts.keep $T/mounts; rm -f $T/app/NEMESIS.data
+check "  앱이 있으면 토스트 없이 화면이 안내(USB 없으면 usb=none)" '[ ! -f $NB/toasts ] && grep -q "^usb=none$" $STF && grep -q "^pm path" $NB/calls && ! grep -q "pm install" $NB/calls'
+# preun: busybox 없는 내비에서 삭제하면 앱을 지우고 오류 줄 없이 끝남(toolbox PATH)
+sed -e "s#^BB=.*#BB=$NB/none#" -e "s#^BK=.*#BK=$NB/pbk#" -e "s#/data/nemesis/apps/korea.projection/svc/hotspot.sh#$T/app/svc/hotspot.sh; export PATH=$TB#" \
+  -e "s#^export PATH=.*#export PATH=$TB#" -e "s#^STAGE=.*#STAGE=$NB/stage#" -e "s#/data/local/tmp/korea-projection-status#$NB/status#g" $T/app/scripts/preun.sh > $NB/preun.sh
+rm -f $NB/calls; mkdir -p $NB/pw $NB/pbk; : > $NB/status.txt
+(HMGDATA=$NB/hd W=$NB/pw BK=$NB/pbk APK_COPY=$NB/copy4.apk /bin/sh $NB/preun.sh) > $NB/out 2>&1; echo $? >> $NB/out
+check "삭제: busybox가 없는 내비도 상태 화면 앱을 지우고(pm uninstall) 작업 폴더·상태 파일을 지움, busybox 오류 줄 없음" 'grep -q "^pm uninstall korea.projection.app" $NB/calls && [ ! -d $NB/pw ] && [ ! -f $NB/status.txt ] && ! grep -q "busybox: not found\|none: not found" $NB/out'
 # 앱 설치 기록이 3-log.txt에 들어감
 echo "11-06 21:00:00 pm install: Failure [INSTALL_FAILED_X]" > $T/w/app-install.log
 HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null 2>&1
@@ -840,6 +923,292 @@ echo "x 1" > $NB/bk/map.bad; check "  시험 지원 차 지도 확인 실패 기
 : > $NB/bk/setup.told; check "  이미 한 번 안내했으면(setup.told) 아님: 부팅마다 뜨지 않음" '! sp'; rm -f $NB/bk/setup.told
 check "서비스: 무선 모드 대기에 들어갈 때 설정 중이면 한 번 기록하고 재부팅하지 말라고 안내" 'grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "if setup_pending; then" && grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "setup.told"'
 check "그랜저IG 2.5: 시험 지원 목록, 지도, 패치 세트 연결" '(HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; car_in IGPE.KOR.0000.V039.001.260902 \"\$CARS_TRY\"") && grep -q "\"IGPE.KOR.\"" $T/app/hmgapi/maps/hyundai/grandeur-gasoline/kor/260902/car.json'
+
+# 진단 USB 스크립트(kp-probe, kp-wifi-diag, kp-sys-restore)는 공개하지 않는다(차 기록·순정 파일이 필요하다).
+# 공개 저장소에는 이 파일들이 없으므로 이 구역은 건너뛴다(패키지 테스트는 위에서 모두 돈다).
+if [ -f $B/scripts/kp-probe.sh ] && [ -f $B/scripts/kp-wifi-diag.sh ] && [ -f $B/scripts/kp-sys-restore.sh ]; then
+# ---- 탐사 USB(kp-probe.sh): busybox 없는 내비(K3 #15)용. 읽기만 하고, 비밀값을 남기지 않는다 ----
+PR=$T/probe
+mkdir -p $PR/bin $PR/usb $PR/wifi $PR/log $PR/apps/korea.projection
+echo package-version=1.5.4 > $PR/apps/korea.projection/NEMESIS.data
+# toolbox에 있는 명령만 둔다: busybox, awk, sed, head, tail, cut, tr, wc, od 실행 파일 없음
+for c in ls cat grep mkdir cp mv rm chmod ln date dd sync id; do ln -s "$(command -v $c)" $PR/bin/$c; done
+for c in getprop pm nemesis settings ps netstat; do ln -s $T/bin/$c $PR/bin/$c; done
+# 진짜 sleep: 탐사의 시간 감시(bwait)가 실제 시간으로 돌아야 한다(가짜 sleep은 모든 명령을 바로 시간 초과로 만든다)
+ln -s /bin/sleep $PR/bin/sleep
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $PR > $PR/bin/am
+# 끝나지 않는 명령: run_to가 TO초 뒤 멈춰야 한다
+printf '#!/bin/sh\nexec /bin/sleep 5\n' > $PR/bin/hmgapid
+cat > $PR/bin/dmesg <<'E'
+#!/bin/sh
+echo "[   10.100000] dhd: Firmware version 7.10.323.48"
+echo "[   10.200000] wlan0: link up a1:b2:c3:d4:e5:f6"
+echo "[   10.300000] dhd: assoc ssid MyHomeNet"
+echo "[   10.400000] wlan0: ip 192.168.43.7"
+echo "[   10.500000] sdio: card ready"
+E
+chmod +x $PR/bin/*
+echo "secret99 MyHomeNet" > $PR/wifi/softap.conf
+echo 'network={ ssid="MyHomeNet" psk="secret99" }' > $PR/wifi/wpa_supplicant.conf
+printf '11-06 10:00:00 시작 안 함: busybox가 없음\n11-06 10:00:01 폰 a1:b2:c3:d4:e5:f6 연결\n' > $PR/log/ap.log
+echo "/dev/block/sda1 $PR/usb vfat rw 0 0" > $PR/mounts
+sed "s#^export PATH=.*#export PATH=$PR/bin#" $B/scripts/kp-probe.sh > $PR/usb/NEMESIS.sh
+probe() {  # $1: 셸 (sh 또는 ksh)
+  rm -rf $PR/usb/kp-probe $PR/d $PR/toasts
+  ln -sf "$(command -v $1)" $PR/bin/sh
+  (cd /; KP_PROBE_TEST=1 D=$PR/d TO=2 TT=3 MOUNTS=$PR/mounts WIFIDIR=$PR/wifi APLOG=$PR/log/ap.log NAPPS=$PR/apps \
+    $PR/bin/sh $PR/usb/NEMESIS.sh) > $PR/out 2>&1
+  echo $? >> $PR/out
+}
+for SH in sh ksh; do
+  command -v $SH >/dev/null || { bad "탐사 USB: $SH 없음"; continue; }
+  probe $SH; PM=$PR/usb/kp-probe/probe.md
+  check "탐사 USB($SH): 성공(0), USB에 probe.md·system-bin.txt, 끝까지 기록" '[ "$(tail -1 $PR/out)" = 0 ] && [ "$(tail -1 $PM)" = 끝 ] && grep -q "^== /system/bin" $PR/usb/kp-probe/system-bin.txt'
+  check "  내비에 남긴 작업 폴더를 지움" '[ ! -e $PR/d ]'
+  check "  비밀값(비밀번호·SSID·MAC·IP)이 결과에 없음" '! grep -r -q -E "secret99|MyHomeNet|a1:b2|192\.168\.43\.7" $PR/usb/kp-probe'
+  check "  Wi-Fi 설정 파일은 이름과 크기만" 'grep -q "softap.conf" $PM && grep -q "wpa_supplicant.conf" $PM'
+  check "  버전 줄과 일반 줄은 남김" 'grep -q "Firmware version 7.10.323.48" $PM && grep -q "sdio: card ready" $PM && grep -q "busybox가 없음" $PM'
+  check "  끝나지 않는 명령은 TO초 뒤 멈춤, 다른 명령은 시간 초과가 없음" '[ "$(grep -c "시간 초과" $PM)" = 1 ] && grep -q "시간 초과 2초" $PM'
+  check "  셸의 작업 종료 메시지(Terminated)가 결과에 섞이지 않음" '! grep -q -i "terminated" $PM'
+  check "  없는 명령은 없음으로 적음" 'grep -q "^- busybox: 없음" $PM && grep -q "^- awk: 없음" $PM'
+  check "  줄바꿈 없는 출력도 남김(dd로 읽은 hello)" 'grep -A1 "dd 가운데 5바이트" $PM | grep -q "> hello"'
+  check "  설치된 패키지를 nemesis 명령 없이 폴더로 읽음" 'grep -q "^korea.projection package-version=1.5.4" $PM'
+  check "  잠금(\$D.lock)을 끝나면 지움" '[ ! -e $PR/d.lock ]'
+  check "  시작·끝 안내" 'grep -q "탐사를 시작합니다" $PR/toasts && grep -q "탐사가 끝났습니다" $PR/toasts'
+done
+# USB가 마운트돼 있지 않으면: 결과를 USB에 쓰지 않고 다시 꽂으라고 안내
+: > $PR/mounts.none
+rm -rf $PR/usb/kp-probe $PR/toasts; ln -sf "$(command -v sh)" $PR/bin/sh
+(cd /; KP_PROBE_TEST=1 D=$PR/d TO=2 MOUNTS=$PR/mounts.none $PR/bin/sh $PR/usb/NEMESIS.sh) > $PR/out 2>&1
+check "탐사 USB: USB를 못 찾으면 아무것도 쓰지 않고 다시 꽂으라고 안내" '[ ! -e $PR/usb/kp-probe ] && grep -q "USB를 찾지 못했습니다" $PR/toasts && [ ! -e $PR/d ]'
+# 남은 잠금(죽은 실행의 것)은 지우고 진행
+mkdir -p $PR/d.lock; echo 999999 > $PR/d.lock/pid
+probe sh
+check "탐사 USB: 죽은 실행이 남긴 잠금은 지우고 진행" '[ "$(tail -1 $PR/out)" = 0 ] && [ -f $PR/usb/kp-probe/probe.md ] && [ ! -e $PR/d.lock ]'
+# 차에서는 경로를 환경 변수로 바꿀 수 없다(KP_PROBE_TEST가 없으면 D 등을 무시)
+mkdir -p $PR/evil; : > $PR/evil/keep; rm -rf $PR/usb/kp-probe
+(cd /; D=$PR/evil MOUNTS=$PR/mounts $PR/bin/sh $PR/usb/NEMESIS.sh) > $PR/out 2>&1
+check "탐사 USB: 테스트 표시가 없으면 환경 변수 D·MOUNTS를 무시(다른 폴더를 지우지 않음)" '[ -f $PR/evil/keep ] && [ ! -e $PR/usb/kp-probe ] && [ ! -e $PR/usb/kp-probe-tmp ]'
+check "탐사 USB: busybox를 부르지 않음" '! grep -v "^ *#" $B/scripts/kp-probe.sh | grep -q -E "\\\$BB|/system/bin/busybox"'
+check "탐사 USB: 내비에 없는 명령(awk·sed·head·tail·cut·tr·wc·uniq·sort·setsid·killall)을 쓰지 않음" '! grep -v "^ *#" $B/scripts/kp-probe.sh | grep -q -E "(^|[|;&(] *)(awk|sed|head|tail|cut|tr|wc|uniq|sort|setsid|killall) "'
+check "탐사 USB: 시스템을 바꾸는 명령(setprop·settings put·svc·pm install·nemesis install/uninstall·remount)이 없음" '! grep -v "^ *#" $B/scripts/kp-probe.sh | grep -q -E "(^|[|;&(] *)(setprop|settings put|svc|pm (install|uninstall)|nemesis (install|uninstall|remount)|hmgapid remount|mount) "'
+
+# --- 니로 Wi-Fi 진단 USB 스크립트 (scripts/kp-wifi-diag.sh) ---
+WD=$T/wd; rm -rf $WD; mkdir -p $WD/bin $WD/usb $WD/sys/net $WD/sys/mod/parameters $WD/data
+mkparams() { mkdir -p $WD/sys/mod/parameters; echo wlan0 > $WD/sys/mod/parameters/iface_name; echo /data/misc/wifi/fw_bcmdhd.bin > $WD/sys/mod/parameters/firmware_path; echo /data/misc/wifi/bcmdhd.cal > $WD/sys/mod/parameters/nvram_path; echo /system/wifi/89359.clm_blob > $WD/sys/mod/parameters/clm_path; }
+# Wi-Fi를 끄면 드라이버가 내려가고(wlan0 사라짐), 켜면 올라온다. $WD/stay가 있으면 꺼도 그대로
+cat > $WD/bin/svc <<E
+#!/bin/sh
+echo "svc \$*" >> $WD/calls
+case "\$2" in
+  disable) [ -f $WD/stay ] || rm -rf $WD/sys/mod $WD/sys/net/wlan0 ;;
+  enable) mkdir -p $WD/sys/net/wlan0; [ -d $WD/sys/mod ] || { mkdir -p $WD/sys/mod/parameters; [ -f $WD/noparams ] || { echo wlan0 > $WD/sys/mod/parameters/iface_name; echo /data/misc/wifi/fw_bcmdhd.bin > $WD/sys/mod/parameters/firmware_path; echo /data/misc/wifi/bcmdhd.cal > $WD/sys/mod/parameters/nvram_path; }; } ;;
+esac
+E
+printf '#!/bin/sh\necho "insmod $*" >> %s/calls\nmkdir -p %s/sys/mod %s/sys/net/wlan0\n' $WD $WD $WD > $WD/bin/insmod
+printf '#!/bin/sh\necho "rmmod $*" >> %s/calls\nrm -rf %s/sys/mod %s/sys/net/wlan0\n' $WD $WD $WD > $WD/bin/rmmod
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $WD > $WD/bin/am
+printf '#!/bin/sh\n[ "$1" = get ] && echo 1\n' > $WD/bin/settings
+printf '#!/bin/sh\necho "11-06 22:32:11.020 E/WifiStateMachine( 563): Connection lost, restart supplicant"\necho "11-06 22:32:11.060 D/WifiHW  ( 563): mac aa:bb:cc:dd:ee:ff ip 192.168.43.23"\necho "11-06 22:32:12.000 I/hostapd ( 9): conf PASS\\\\word99 here"\necho "11-06 22:32:12.100 I/BT ( 9): remote device name Johns iPhone"\necho "11-06 22:32:12.200 D/WifiHW ( 563): insmod args iface_name=wlan0 firmware_path=/x"\necho "11-06 22:32:12.300 I/BtConn ( 9): Connected to Kim'"'"'s phone"\n' > $WD/bin/logcat
+printf '#!/bin/sh\necho "[  12.3] dhd: wlan0 MAC 11:22:33:44:55:66 loaded"\n' > $WD/bin/dmesg
+printf '#!/bin/sh\necho "WifiStateMachine state: DriverStartedState"\necho "SSID: MyHomeNet"\n' > $WD/bin/dumpsys
+printf '#!/bin/sh\necho 1.16.7\n' > $WD/bin/nemesis
+printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $WD > $WD/bin/ps
+# sleep는 시계(uptime 파일)를 그만큼 앞으로 돌린다
+printf '#!/bin/sh\nt=$(cat %s/uptime | cut -d. -f1); echo "$((t + ${1%%.*})).00 1.00" > %s/uptime\n' $WD $WD > $WD/bin/sleep
+chmod +x $WD/bin/*
+sed "s#^export PATH=.*#export PATH=$WD/bin:$T/bin:/usr/bin:/bin:/sbin#" $B/scripts/kp-wifi-diag.sh > $WD/diag.sh
+echo "  1 root 1000 wpa_supplicant -iwlan0" > $WD/ps
+wdreset() { rm -rf $WD/d $WD/usb/kp-wifidiag $WD/calls $WD/toasts $WD/stay $WD/noparams $WD/sys; mkdir -p $WD/sys/net/wlan0; mkparams; echo "100.00 1.00" > $WD/uptime; echo "/dev/block/sda1 $WD/usb vfat rw 0 0" > $WD/mounts; }
+wdrun() { (cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$T/app SRC=$T/softap.conf MOD=$WD/sys/mod NET=$WD/sys/net KO=/system/wifi/bcmdhd.ko APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime OBS_SEC=9 EXP_SEC=9 TICK=3 timeout 60 sh $WD/diag.sh) > $WD/out 2>&1; }
+wdreset; wdrun
+OB=$(ls -d $WD/usb/kp-wifidiag/out-OBS-* 2>/dev/null | head -1)
+check "진단 1단계: 기록을 USB로 옮기고 다음은 2단계" '[ -n "$OB" ] && [ -s $OB/1-before.txt ] && [ -s $OB/2-timeline.txt ] && [ -s $OB/3-after.txt ] && [ -s $OB/logcat-before.txt ] && [ "$(cat $WD/d/step)" = EXP ] && [ -z "$(ls -d $WD/d/out-* 2>/dev/null)" ]'
+check "  Wi-Fi를 껐다 켜고(순서대로) 시간표를 3초마다 남김, 끝에 안내" '[ "$(sed -n 1p $WD/calls)" = "svc wifi disable" ] && [ "$(sed -n 2p $WD/calls)" = "svc wifi enable" ] && [ "$(grep -c " | " $OB/2-timeline.txt)" -ge 5 ] && grep -q "1단계를 마쳤습니다" $WD/toasts'
+check "  기록에 MAC·IP·카플레이 비밀번호·SSID 줄·기기 이름 줄이 없고, 드라이버 인자 줄은 남음" '! grep -r -q -i -e "aa:bb:cc" -e "11:22:33" -e "192.168.43.23" -e "word99" -e "MyHomeNet" -e "Johns" -e "Kim" $OB && grep -q "xx:xx:xx:xx:xx:xx" $OB/logcat-before.txt && grep -q "iface_name=wlan0" $OB/logcat-before.txt && grep -q "Connection lost" $OB/logcat-before.txt'
+check "  설치 전 Wi-Fi 설정(wifi_on)을 적어 둠" '[ "$(cat $WD/d/wifi_on)" = 1 ]'
+rm -f $WD/calls $WD/toasts; mkparams; wdrun
+EX=$(ls -d $WD/usb/kp-wifidiag/out-EXP-* 2>/dev/null | head -1)
+check "진단 2단계: Wi-Fi 서비스를 끄고 드라이버가 내려가면 읽어 둔 인자로 직접 올림, 끝에 내리고(rmmod) 되돌림" '[ -n "$EX" ] && grep -qx "insmod /system/wifi/bcmdhd.ko iface_name=wlan0 firmware_path=/data/misc/wifi/fw_bcmdhd.bin nvram_path=/data/misc/wifi/bcmdhd.cal clm_path=/system/wifi/89359.clm_blob" $WD/calls && [ "$(sed -n 1p $WD/calls)" = "svc wifi disable" ] && [ "$(sed -n 3p $WD/calls)" = "rmmod bcmdhd" ] && [ "$(sed -n 4p $WD/calls)" = "svc wifi enable" ] && [ "$(cat $WD/d/step)" = AFTER ]'
+check "  아이폰 연결 안내 토스트" 'grep -q "아이폰으로 무선 카플레이를 연결해 보세요" $WD/toasts && grep -q "2단계를 마쳤습니다" $WD/toasts'
+wdreset; echo EXP > $WD/d/step 2>/dev/null || { mkdir -p $WD/d; echo EXP > $WD/d/step; }; echo 1 > $WD/d/wifi_on; rm -rf $WD/sys/mod/parameters; mkdir -p $WD/sys/mod; wdrun
+check "  드라이버 인자를 못 읽으면 직접 올리지 않음(추측하지 않음)" '! grep -q insmod $WD/calls && grep -r -q "인자를 읽지 못함" $WD/usb/kp-wifidiag'
+wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; echo 1 > $WD/d/wifi_on; touch $WD/stay; wdrun
+check "  Wi-Fi 서비스를 꺼도 드라이버가 그대로면 직접 올리지 않고 관찰만" '! grep -q insmod $WD/calls && grep -r -q "드라이버가 내려가지 않음" $WD/usb/kp-wifidiag'
+wdreset; mkdir -p $WD/d; echo AFTER > $WD/d/step; echo 1 > $WD/d/wifi_on; wdrun
+check "진단 3단계(재부팅 뒤): 모으기만 하고 끝, Wi-Fi는 건드리지 않음" '[ "$(cat $WD/d/step)" = DONE ] && [ ! -f $WD/calls ] && grep -q "모두 마쳤습니다" $WD/toasts'
+wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; echo 0 > $WD/d/wifi_on; : > $WD/usb/kp-wifidiag-reset; wdrun; rm -f $WD/usb/kp-wifidiag-reset
+check "되돌리기 파일: 실험 없이 설치 전 Wi-Fi 상태로(여기서는 꺼짐) 되돌리고 처음으로" '[ "$(cat $WD/calls)" = "svc wifi disable" ] && [ ! -f $WD/d/step ] && grep -q "처음으로 돌렸습니다" $WD/toasts'
+wdreset; : > $WD/mounts; wdrun
+check "USB가 떨어져 있으면 기록을 헤드유닛에 남김" '[ -n "$(ls -d $WD/d/out-OBS-* 2>/dev/null)" ] && grep -q "옮기지 못했습니다" $WD/toasts'
+rm -f $WD/calls $WD/toasts; echo "/dev/block/sda1 $WD/usb vfat rw 0 0" > $WD/mounts; wdrun
+check "  다음에 꽂으면 옮기기만 하고 다음 단계는 하지 않음" '[ -n "$(ls -d $WD/usb/kp-wifidiag/out-OBS-* 2>/dev/null)" ] && [ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && grep -q "지난번 기록을 USB로 옮겼습니다" $WD/toasts'
+wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; : > $WD/usb/kp-wifidiag-reset; wdrun; rm -f $WD/usb/kp-wifidiag-reset
+check "  설치 전 Wi-Fi 기록이 없으면 되돌리기는 켬(끄지 않음)" '[ "$(cat $WD/calls)" = "svc wifi enable" ]'
+wdreset; mkdir -p $WD/d.lock; echo $$ > $WD/d.lock/pid; wdrun
+check "  잠금이 남아 있어도 그 프로세스가 진단이 아니면 이어서 진행(남은 잠금 정리)" '[ "$(cat $WD/d/step)" = EXP ] && [ ! -d $WD/d.lock ]'
+echo NIROX.KOR.0000.V039.001.260902 > $T/product; wdreset; wdrun; rm -f $T/product
+check "  니로가 아니면 아무것도 하지 않음" '[ ! -f $WD/calls ] && grep -q "니로 하이브리드 전용" $WD/toasts'
+wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; printf '1-before remove!\n' > $WD/usb/kp-wifidiag-snap; wdrun
+SN=$(ls -d $WD/usb/kp-wifidiag/out-SNAP-1-beforeremove-* 2>/dev/null | head -1)
+check "상태 사진(읽기 전용): Wi-Fi·드라이버를 건드리지 않고 단계도 그대로, 이름은 첫 줄의 영문·숫자" '[ -n "$SN" ] && [ -s $SN/1-now.txt ] && [ -s $SN/logcat-now.txt ] && [ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && [ ! -f $WD/d/wifi_on ] && grep -q "상태 사진(1-beforeremove)을 USB에 저장" $WD/toasts'
+check "  흔적 찾기 항목(영구 속성, /data/misc/wifi 시각, 설정 목록, 시스템 파일 md5)" 'grep -q "흔적 찾기: 영구 속성" $SN/1-now.txt && grep -q "흔적 찾기: /data/misc/wifi" $SN/1-now.txt && grep -q "흔적 찾기: 설정 전체" $SN/1-now.txt && grep -q "app_process" $SN/1-now.txt'
+wdreset; rm -f $WD/d/step; cp $T/app/svc/hotspot.sh $WD/usb/kp-hotspot-lib.sh; wdrun2() { (cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$WD/noapp SRC=$T/softap.conf MOD=$WD/sys/mod NET=$WD/sys/net APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime timeout 60 sh $WD/diag.sh) > $WD/out 2>&1; }; wdrun2
+SN=$(ls -d $WD/usb/kp-wifidiag/out-SNAP-* 2>/dev/null | head -1)
+check "  우리 패키지가 없어도(NEMESIS 재설치 직후) USB의 해석기 사본으로 비밀번호를 가림" '[ -n "$SN" ] && ! grep -r -q "word99" $SN && grep -q "\[가림\]" $SN/logcat-now.txt && ! grep -q "주의: softap.conf" $SN/1-now.txt'
+wdreset; rm -f $WD/usb/kp-hotspot-lib.sh; wdrun2; rm -f $WD/usb/kp-wifidiag-snap
+SN=$(ls -d $WD/usb/kp-wifidiag/out-SNAP-* 2>/dev/null | head -1)
+check "  해석기가 아예 없으면 그 사실을 남김(줄 단위로는 계속 거름)" 'grep -q "주의: softap.conf" $SN/1-now.txt'
+printf '#!/bin/sh\necho "Row: 0 _id=1, name=wifi_on, value=1"\necho "Row: 1 _id=2, name=device_vin_code, value=KMHXX00000"\necho "Row: 2 _id=3, name=bluetooth_name, value=Kim phone"\n' > $WD/bin/content; chmod +x $WD/bin/content
+wdreset; printf 'x\n' > $WD/usb/kp-wifidiag-snap; wdrun
+SN=$(ls -d $WD/usb/kp-wifidiag/out-SNAP-* 2>/dev/null | head -1)
+check "  settings list가 없으면 content query로 읽어 이름=값으로, 차대번호·기기 이름 줄은 버림" 'grep -q "content query로 읽음" $SN/1-now.txt && grep -qx "wifi_on=1" $SN/1-now.txt && ! grep -r -q -e "KMHXX" -e "Kim phone" $SN'
+wdreset; mkdir -p $WD/d/out-OBS-old; echo old > $WD/d/out-OBS-old/x.txt; printf 'y\n' > $WD/usb/kp-wifidiag-snap; wdrun
+check "  지난 기록이 남아 있어도 옮긴 뒤 이어서 상태 사진을 찍음" '[ -f $WD/usb/kp-wifidiag/out-OBS-old/x.txt ] && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-SNAP-y-* 2>/dev/null)" ]'
+wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; printf 'z\n' > $WD/usb/kp-wifidiag-snap; : > $WD/usb/kp-wifidiag-reset; wdrun; rm -f $WD/usb/kp-wifidiag-reset $WD/usb/kp-wifidiag-snap
+check "  되돌리기 파일과 함께 있어도 사진은 읽기만(Wi-Fi 안 건드림)" '[ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-SNAP-z-* 2>/dev/null)" ]'
+rm -f $WD/bin/content
+# --- A/B 시험 (root 소유 Wi-Fi 설정 파일) ---
+# 이 PC에서는 다른 사용자로 소유자를 바꿀 수 없어, chown은 소유자를 옆 파일(<파일>.owner)에 적고 ls -ln은 그것을 보여 준다
+AB=$WD/ab; mkdir -p $AB
+cat > $WD/bin/chown <<E
+#!/bin/sh
+echo "chown \$*" >> $WD/calls
+[ -f $WD/chown_fail ] && exit 1
+echo "\$1" > "\$2.owner"
+E
+cat > $WD/bin/ls <<E
+#!/bin/sh
+if [ "\$1" = -ln ]; then
+  case "\$2" in $AB/*)
+    [ -e "\$2" ] || exit 1
+    o=\$(cat "\$2.owner" 2>/dev/null || echo 0:0); echo "-rw-rw----    1 \${o%%:*}        \${o#*:}              88 Nov  2 17:25 \$2"; exit 0 ;;
+  esac
+fi
+exec /bin/ls "\$@"
+E
+# mv는 옆 파일(소유자 기록)도 같이 옮긴다
+cat > $WD/bin/mv <<E
+#!/bin/sh
+[ "\$1" = -f ] && shift
+[ -f "\$1.owner" ] && /bin/mv -f "\$1.owner" "\$2.owner"
+exec /bin/mv -f "\$1" "\$2"
+E
+chmod +x $WD/bin/chown $WD/bin/ls $WD/bin/mv
+C=$AB/wpa_supplicant.conf; CR=$AB/wpa_supplicant_crc32.conf
+abreset() { wdreset; rm -rf $AB/* $WD/chown_fail; printf 'network={\n ssid="OldTestNet"\n}\n' > $C; echo 0:0 > $C.owner; : > $WD/usb/kp-wifidiag-ab; }
+abrun() { (cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$T/app SRC=$T/softap.conf MOD=$WD/sys/mod NET=$WD/sys/net APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime OBS_SEC=6 TICK=3 WCONF=$C timeout 60 sh $WD/diag.sh) > $WD/out 2>&1; }
+abreset; abrun
+check "A/B 시험 A: 원래 상태(소유자 root, 권한 660, crc32 없음)를 백업하고 단계 B를 적은 뒤 정상 소유자로 바꿈" '[ "$(cat $C.owner)" = 1000:1010 ] && [ "$(cat $WD/d/ab-orig)" = "0:0 660 absent" ] && cmp -s $WD/d/ab-conf.bak $C && [ "$(cat $WD/d/abstep)" = B ] && ! grep -q "^svc" $WD/calls && grep -q "B를 꼭 진행" $WD/toasts'
+check "  백업 내용(옛 Wi-Fi 이름)은 USB로 가지 않음" '! grep -r -q -e "OldTestNet" -e "network={" $WD/usb/kp-wifidiag'
+rm -f $WD/d/abstep; abrun
+check "  A가 끊겨 다시 돌아도 원래 소유자 기록(root)을 덮어쓰지 않음" '[ "$(cat $WD/d/ab-orig)" = "0:0 660 absent" ] && [ "$(cat $C.owner)" = 1000:1010 ]'
+printf 'recreated OldTestNet\n' > $C; echo 1000:1010 > $C.owner; echo crc > $CR; echo 1000:1010 > $CR.owner; rm -f $WD/toasts; abrun
+check "A/B 시험 B: 원래 내용·소유자(root)로 되돌리고 새로 생긴 crc32 파일은 지움, 확인 뒤 C로" '[ "$(cat $C.owner)" = 0:0 ] && grep -q "ssid=\"OldTestNet\"" $C && [ ! -e $CR ] && [ "$(cat $WD/d/abstep)" = C ] && grep -q "B 끝" $WD/toasts && [ -s "$(ls -d $WD/usb/kp-wifidiag/out-AB-B-* | head -1)/3-count.txt" ]'
+check "  기록에 옛 Wi-Fi 이름이 남지 않음(백업의 ssid 값도 가림)" '! grep -r -q "OldTestNet" $WD/usb/kp-wifidiag'
+printf 'changed at boot\n' > $C; rm -f $WD/toasts; abrun
+check "A/B 시험 C: 부팅 중 바뀌었으면 다시 되돌리고 백업 유지, 단계는 C 그대로" '[ "$(cat $WD/d/abstep)" = C ] && [ -f $WD/d/ab-conf.bak ] && grep -q "ssid=\"OldTestNet\"" $C && grep -q "한 번 더 재부팅" $WD/toasts'
+rm -f $WD/toasts; abrun
+check "  원래와 같으면 백업 삭제·끝" '[ "$(cat $WD/d/abstep)" = DONE ] && [ ! -f $WD/d/ab-conf.bak ] && [ ! -f $WD/d/ab-orig ] && grep -q "모두 마쳤습니다" $WD/toasts'
+abreset; abrun; touch $WD/chown_fail; rm -f $WD/toasts; abrun; rm -f $WD/chown_fail
+check "  B에서 되돌리기를 확인하지 못하면 B에 머물고 실패 안내(백업 유지)" '[ "$(cat $WD/d/abstep)" = B ] && [ -f $WD/d/ab-conf.bak ] && grep -q "확인하지 못했습니다" $WD/toasts'
+: > $WD/usb/kp-wifidiag-reset; rm -f $WD/toasts; abrun; rm -f $WD/usb/kp-wifidiag-reset
+check "  되돌리기 파일과 함께: 백업으로 원래대로(root), 단계 처음으로" '[ "$(cat $C.owner)" = 0:0 ] && [ ! -f $WD/d/abstep ] && grep -q "원래대로 되돌렸습니다" $WD/toasts'
+abreset; echo crc0 > $CR; echo 1000:1010 > $CR.owner; abrun; rm -f $CR $CR.owner; rm -f $WD/toasts; abrun
+check "  crc32 파일이 원래 있었으면 내용·소유자까지 되돌림" '[ "$(cat $CR 2>/dev/null)" = crc0 ] && [ "$(cat $CR.owner)" = 1000:1010 ] && [ "$(cat $WD/d/abstep)" = C ]'
+abreset; abrun; abrun; abrun; rm -f $WD/toasts; abrun
+check "  끝난 뒤 다시 꽂으면 이미 마쳤다고만 안내(파일은 그대로)" '[ "$(cat $WD/d/abstep)" = DONE ] && grep -q "이미 마쳤습니다" $WD/toasts && [ "$(cat $C.owner)" = 0:0 ]'
+: > $WD/usb/kp-wifidiag-reset; rm -f $WD/toasts; abrun; rm -f $WD/usb/kp-wifidiag-reset
+check "  끝난 뒤 되돌리기 파일과 함께: 되돌릴 것 없이 단계만 처음으로" '[ ! -f $WD/d/abstep ] && grep -q "단계만 처음으로" $WD/toasts'
+abreset; abrun; : > $WD/usb/kp-wifidiag-reset; abrun; rm -f $WD/usb/kp-wifidiag-reset
+check "  되돌리기에 성공하면 백업도 지움(다음 A는 그때 상태를 새로 기록)" '[ ! -f $WD/d/ab-orig ] && [ ! -f $WD/d/ab-conf.bak ] && [ "$(cat $C.owner)" = 0:0 ]'
+abreset; touch $WD/chown_fail; abrun; rm -f $WD/chown_fail
+check "  소유자를 못 바꾸면 원래대로 두고 멈춤" '[ "$(cat $C.owner)" = 0:0 ] && [ ! -f $WD/d/abstep ] && grep -q "바꾸지 못해" $WD/toasts'
+abreset; rm -f $C; abrun
+check "  파일이 없으면 아무것도 바꾸지 않음" '[ ! -f $WD/d/abstep ] && grep -q "시험할 파일이 없어" $WD/toasts'
+rm -f $WD/usb/kp-wifidiag-ab $WD/bin/chown $WD/bin/ls $WD/bin/mv
+check "진단 스크립트 구문 검사(ksh 계열)" 'for k in $KSHS; do $k -n $B/scripts/kp-wifi-diag.sh || exit 1; done'
+
+# --- 니로 시스템 파일 순정 되돌리기 USB 스크립트 (scripts/kp-sys-restore.sh) ---
+SR=$T/sr; rm -rf $SR; mkdir -p $SR/bin $SR/usb $SR/onebin/depehev_kr $SR/perms
+cat > $SR/bin/nemesis <<E
+#!/bin/sh
+echo "nemesis \$*" >> $SR/calls
+[ "\$1" = remount ] && echo "/dev/block/system /system ext4 \$2,relatime 0 0" > $SR/sysmount
+E
+cat > $SR/bin/chown <<E
+#!/bin/sh
+echo "chown \$*" >> $SR/calls
+echo "\$1" > "\$2.owner"
+E
+cat > $SR/bin/mv <<E
+#!/bin/sh
+[ "\$1" = -f ] && shift
+[ -f "\$1.owner" ] && /bin/mv -f "\$1.owner" "\$2.owner"
+exec /bin/mv -f "\$1" "\$2"
+E
+cat > $SR/bin/ls <<E
+#!/bin/sh
+if [ "\$1" = -ln ]; then
+  case "\$2" in $SR/*)
+    [ -e "\$2" ] || exit 1
+    o=\$(cat "\$2.owner" 2>/dev/null || echo 0:0); echo "-rw-r--r--    1 \${o%%:*}        \${o#*:}              88 Nov  2 17:25 \$2"; exit 0 ;;
+  esac
+fi
+exec /bin/ls "\$@"
+E
+printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $SR > $SR/bin/am
+chmod +x $SR/bin/*
+FXT=$SR/onebin/depehev_kr/featurexml.cfg
+srreset() {
+  rm -rf $SR/d $SR/d.lock $SR/usb/kp-sysrestore $SR/calls $SR/toasts $SR/perms/*
+  # 진짜 순정(11-03 고치기 전에 뜬 원본)에 17·18번째 줄 '#'을 붙여 지금 차의 파일(c3fa5e85…)을 만든다
+  python3 - $FXT $B/usb-backup/CARPLAY-20261106-before-1.5.3/_dev/featurexml.before.cfg <<'E'
+import sys
+b=open(sys.argv[2],'rb').read().split(b"\r\n")
+b[16]=b"#"+b[16]; b[17]=b"#"+b[17]
+open(sys.argv[1],"wb").write(b"\r\n".join(b))
+E
+  echo 0:0 > $FXT.owner; cp $FXT $SR/orig.cfg
+  echo '<permissions/>' > $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml
+  echo '<permissions2/>' > $SR/perms/com.hkmc.software.connectivity.androidauto_wireless.xml
+  echo "/dev/block/system /system ext4 ro,relatime 0 0" > $SR/sysmount
+  echo "/dev/block/sda1 $SR/usb vfat rw 0 0" >> $SR/sysmount
+}
+srrun() { (cd $SR && PATH=$SR/bin:$T/bin:/usr/bin:/bin:/sbin BB=$T/bin/bb U=$SR/usb D=$SR/d MOUNTS=$SR/sysmount ONEBIN=$SR/onebin PERMS=$SR/perms sh -c 'sed "s#^export PATH=.*#export PATH='$SR'/bin:'$T'/bin:/usr/bin:/bin:/sbin#" '$B'/scripts/kp-sys-restore.sh > '$SR'/run.sh; sh '$SR'/run.sh') > $SR/out 2>&1; }
+# USB 마운트 줄을 nemesis remount가 지우지 않게: 스텁은 /system 줄만 바꾸고 USB 줄은 다시 붙인다
+cat > $SR/bin/nemesis <<E
+#!/bin/sh
+echo "nemesis \$*" >> $SR/calls
+if [ "\$1" = remount ]; then
+  { echo "/dev/block/system /system ext4 \$2,relatime 0 0"; echo "/dev/block/sda1 $SR/usb vfat rw 0 0"; } > $SR/sysmount
+fi
+E
+chmod +x $SR/bin/nemesis
+srreset; srrun
+check "  바꾸기 전 파일이 지금 차의 md5(c3fa5e85)와 같음(테스트 준비 확인)" '[ "$(md5 -q $SR/orig.cfg 2>/dev/null || md5sum < $SR/orig.cfg | cut -d" " -f1)" = c3fa5e8597b0a3e437ee81a6efc0e63a ]'
+check "순정 되돌리기: 결과가 11-03 원본과 바이트까지 같음(md5 a5ce9ddd), 권한 파일 2개 삭제" 'cmp -s $FXT $B/usb-backup/CARPLAY-20261106-before-1.5.3/_dev/featurexml.before.cfg && [ ! -e $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml ]'
+check "  featurexml 17·18번째 줄의 '#'만 빠짐(CRLF 그대로, 크기 2바이트 줄어듦)" '[ $(( $(wc -c < $SR/orig.cfg) - $(wc -c < $FXT) )) = 2 ] && [ "$(sed -n 17p $FXT)" = "$(printf -- "-/system/etc/permissions/com.hkmc.software.connectivity.carplay_wireless.xml\r")" ] && [ "$(sed -n 18p $FXT)" = "$(printf -- "-/system/etc/permissions/com.hkmc.software.connectivity.androidauto_wireless.xml\r")" ] && [ "$(sed -n 12p $FXT)" = "$(sed -n 12p $SR/orig.cfg)" ] && [ ! -e $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml ] && [ ! -e $SR/perms/com.hkmc.software.connectivity.androidauto_wireless.xml ]'
+check "  /system을 rw로 열었다가 원래(ro)로 닫고, 원본을 헤드유닛·USB에 백업, 소유자 유지" 'grep -qx "nemesis remount rw" $SR/calls && [ "$(tail -1 $SR/calls)" = "nemesis remount ro" ] && cmp -s $SR/d/bak/featurexml.cfg $SR/orig.cfg && [ -n "$(ls -d $SR/usb/kp-sysrestore/out-*/backup 2>/dev/null)" ] && [ "$(cat $FXT.owner)" = 0:0 ] && [ "$(cat $SR/d/step)" = DONE ] && grep -q "순정으로 되돌렸습니다" $SR/toasts'
+rm -f $SR/toasts $SR/calls; srrun
+check "  다시 꽂으면 상태만 기록(바꾸지 않음)" '! grep -q remount $SR/calls 2>/dev/null && grep -q "이미 바꿨습니다" $SR/toasts'
+: > $SR/usb/kp-sysrestore-reset; rm -f $SR/toasts; srrun; rm -f $SR/usb/kp-sysrestore-reset
+check "되돌리기 파일: 백업한 원본 featurexml(바이트 그대로)과 권한 파일 2개를 다시 넣음" 'cmp -s $FXT $SR/orig.cfg && [ "$(cat $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml)" = "<permissions/>" ] && [ -f $SR/perms/com.hkmc.software.connectivity.androidauto_wireless.xml ] && grep -q "원본으로 되돌렸습니다" $SR/toasts && [ "$(cat $SR/d/step)" = RESET ]'
+srreset; printf 'line1\r\n' > $FXT; cp $FXT $SR/orig.cfg; srrun
+check "  17·18번째 줄이 예상과 다르면 아무것도 바꾸지 않음(/system도 열지 않음)" 'cmp -s $FXT $SR/orig.cfg && [ -f $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml ] && ! grep -q remount $SR/calls 2>/dev/null && grep -q "아무것도 바꾸지 않았습니다" $SR/toasts'
+srreset; python3 -c "
+p='$FXT'; b=open(p,'rb').read(); open(p,'wb').write(b[:-2])"; cp $FXT $SR/orig.cfg; srrun
+check "  원본 끝에 줄바꿈이 없으면(바이트가 더 바뀜) 쓰지 않음" 'cmp -s $FXT $SR/orig.cfg && ! grep -q remount $SR/calls 2>/dev/null'
+srreset; echo NIROX.KOR.0000.V039.001.260902 > $T/product; srrun; rm -f $T/product
+check "  니로가 아니면 아무것도 하지 않음" 'cmp -s $FXT $SR/orig.cfg && grep -q "니로 하이브리드 전용" $SR/toasts'
+srreset; cp $B/usb-backup/CARPLAY-20261106-before-1.5.3/_dev/featurexml.before.cfg $FXT; cp $FXT $SR/orig.cfg; srrun
+check "  featurexml이 이미 순정이면 그 파일은 그대로 두고 권한 파일만 지움" 'cmp -s $FXT $SR/orig.cfg && [ ! -e $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml ] && grep -q "순정으로 되돌렸습니다" $SR/toasts'
+srreset; printf 'x' >> $FXT; cp $FXT $SR/orig.cfg; srrun
+check "  md5가 예상(지금 값·순정)과 다르면 아무것도 바꾸지 않음" 'cmp -s $FXT $SR/orig.cfg && [ -f $SR/perms/com.hkmc.software.connectivity.carplay_wireless.xml ] && ! grep -q remount $SR/calls 2>/dev/null'
+check "순정 되돌리기 스크립트 구문 검사(ksh 계열)" 'for k in $KSHS; do $k -n $B/scripts/kp-sys-restore.sh || exit 1; done'
+else
+  echo "건너뜀: 진단 USB 스크립트 테스트 (공개 저장소에 없는 파일)"
+fi
 
 echo "---"
 [ $fails -eq 0 ] && echo "모두 통과" || { echo "실패 $fails개"; exit 1; }

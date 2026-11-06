@@ -24,9 +24,12 @@ if [ -n "$P" ] && $BB ps | $BB grep -v grep | $BB grep -q "^ *$P .*cpdrive/watch
   echo "USB 스크립트(cp-drive.sh)의 핫스팟을 멈춤"
 fi
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
-# busybox가 없는 내비(K3 BDPE, #15): 아무것도 하지 않는다(서비스도 대기만 함). 한 번 알린다.
+# busybox가 없는 내비(K3 BDPE·K8 GL3HEV, #15·#19): 무선 설정은 하지 않는다(서비스도 대기만 함). 한 번 알린다.
+# 상태 화면 앱만 설치한다(1.5.5): 앱이 없으면 Launch 때 NEMESIS가 "Error type 3 … does not exist"를 띄워 안내를 가린다.
+# 앱 설치가 실패해도 패키지 설치는 성공으로 둔다(Launch 때 다시 시도). 결과는 $W/app-install.log에 남는다.
 if ! has_bb; then
-  m="Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다(아무것도 바꾸지 않았습니다). USB를 꽂고 Launch를 눌러 만든 제보 파일을 보내 주시거나 삭제해 주세요."
+  install_app >/dev/null 2>&1
+  m="Korea Projection: 이 내비에서는 아직 동작하지 않습니다(지원 조사 중). 무선 설정은 하지 않았습니다."
   echo "$m"
   am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
     --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1

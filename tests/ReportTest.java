@@ -99,6 +99,35 @@ public class ReportTest {
         int[] tiny = Report.fit(50, q2.size);
         check("아주 작은 자리도 칸 1px 이상, 음수 여백 없음", tiny[0] >= 1 && tiny[1] >= 0);
 
+        // 1.5.5 설치 진행 기록
+        String PR = "pct=40\nstate=run\nstage=이 차의 지도를 만드는 중입니다(1~2분)\nstart=1000\nt=1100\nboot=abc-123\n";
+        Report pr = Report.parse(PR);
+        check("진행 기록: 이번 부팅이면 진행 중, 40%, 경과 2분 05초", pr.progRunning("abc-123\n") && pr.progPct() == 40
+            && "2분 05초".equals(Report.mmss(pr.progElapsed(1125))));
+        check("  지난 부팅의 기록이면 진행 막대를 보이지 않음", !pr.progRunning("other") && !pr.progRunning(null));
+        check("  15분 넘게 새로 쓰이지 않은 기록은 멈춘 것으로 봄", pr.progRunning("abc-123", 1100 + 900) && !pr.progRunning("abc-123", 1100 + 901));
+        check("  진행 중이면 맨 위 판정을 바꾸지 않음", pr.progVerdict("abc-123") == null);
+        Report rb = Report.parse(PR.replace("state=run", "state=reboot").replace("stage=이 차의 지도를 만드는 중입니다(1~2분)", "stage=무선 카플레이 설정을 마쳤습니다. 내비를 재부팅해 주세요."));
+        check("  재부팅 필요 → 그 문구가 판정, 노랑", "무선 카플레이 설정을 마쳤습니다. 내비를 재부팅해 주세요.".equals(rb.progVerdict("abc-123")) && rb.progLevel() == 1);
+        Report rf = Report.parse(PR.replace("state=run", "state=fail").replace("stage=이 차의 지도를 만드는 중입니다(1~2분)", "stage=HMG-API가 없습니다."));
+        check("  실패 → 그 문구가 판정, 빨강", "HMG-API가 없습니다.".equals(rf.progVerdict("abc-123")) && rf.progLevel() == 2);
+        check("  준비됨(done)은 판정을 바꾸지 않음(상태표 판정 그대로)", Report.parse(PR.replace("state=run", "state=done")).progVerdict("abc-123") == null);
+        check("  진행률이 이상하면 0~100으로", Report.parse("pct=250").progPct() == 100 && Report.parse("pct=x").progPct() == 0 && Report.parse("pct=-5").progPct() == 0);
+        check("  시간: 59초, 1분 00초, 시작 기록 없으면 -", "59초".equals(Report.mmss(59)) && "1분 00초".equals(Report.mmss(60)) && "-".equals(Report.mmss(Report.parse("").progElapsed(5))));
+
+        // 1.5.5 busybox 없는 내비(K3·K8): status.sh가 짧은 상태 파일만 쓴다
+        String NB = "support=nobb\nproduct=BDPE.KOR.0000.V039.001.260902\nplatform=tcc803x\npkgver=1.5.5\nusb=saved\nmade=11-07 03:00\n";
+        Report nb = Report.parse(NB);
+        check("busybox 없는 내비 → '아직 동작하지 않습니다(지원 조사 중)', 노랑", nb.nobb()
+            && nb.verdict().startsWith("이 내비에서는 아직 동작하지 않습니다") && nb.level() == 1);
+        check("  표는 6줄: 플랫폼, 지원 안 됨, 무선 설정 안 함, 제보 파일 저장함", nb.rows().size() == 6
+            && "tcc803x".equals(row(nb, "내비 종류(플랫폼)")) && row(nb, "제보 파일").startsWith("USB의 KoreaProjection-report")
+            && row(nb, "무선 설정").startsWith("하지 않았습니다"));
+        check("  USB가 없으면 Launch를 다시 누르라고, 쓰지 못했으면 다른 USB", row(Report.parse(NB.replace("usb=saved", "usb=none")), "제보 파일").startsWith("USB를 꽂고")
+            && row(Report.parse(NB.replace("usb=saved", "usb=fail")), "제보 파일").startsWith("USB에 쓰지 못함"));
+        check("  QR 링크에 support·platform이 들어감", nb.issueUrl().contains("support%3A%20nobb") && nb.issueUrl().contains("platform%3A%20tcc803x"));
+        check("  보통 상태 파일은 busybox 없는 내비가 아님(표 15줄 그대로)", !r.nobb() && r.rows().size() == 15);
+
         System.out.println(fails == 0 ? "Java 모두 통과" : "Java 실패 " + fails + "개");
         System.exit(fails == 0 ? 0 : 1);
     }

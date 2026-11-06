@@ -7,8 +7,13 @@ export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
 BB=/system/bin/busybox
 BK=/data/nemesis/backup/korea.projection
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
-stop_all
+# busybox가 없는 내비(K3·K8)는 우리 hostapd를 켠 적이 없다: 오류 줄만 나오므로 건너뛴다
+has_bb && stop_all
 rm -f $CONF
+# Launch가 남긴 "설치 끝나면 다시 저장" 대기(status.sh --wait)도 멈추고, 진행 기록을 지운다
+_wp=$(cat $W/wait.pid 2>/dev/null)
+[ -n "$_wp" ] && $BB grep -q status.sh /proc/$_wp/cmdline 2>/dev/null && kill $_wp 2>/dev/null
+rm -f $PROG $PROG.tmp
 rm -rf $W
 # 상태 화면용 파일 (bin/status.sh가 $W 밖에 쓴다)
 rm -f /data/local/tmp/korea-projection-status.txt /data/local/tmp/korea-projection-status.txt.tmp
@@ -57,6 +62,9 @@ elif [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
   echo "HMG-API 데몬 응답 없음: 무선 모드를 지우지 못함"
   modmsg=" HMG-API 앱에서 무선 모드(Wireless CarPlay + Android Auto)를 지우고 적용해 주세요."
 fi
+# Wi-Fi 잠금(1.5.5)을 되돌린다: 설정 파일의 원래 소유자·권한, 치웠던 crc32 파일. 다음 부팅부터 Wi-Fi 서비스가
+# 원래대로 wpa_supplicant를 띄운다(무선 카플레이 핫스팟은 이 패키지와 함께 없어진다).
+wifi_unlock && echo "Wi-Fi 잠금 되돌림"
 # 1이 아니면 꺼져 있던 것으로 본다(한 번도 안 켠 차는 null일 수 있다). 기록이 없으면 건드리지 않는다.
 [ -f $BK/wifi_on ] && [ "$(cat $BK/wifi_on 2>/dev/null)" != 1 ] && svc wifi disable
 # Wi-Fi 서비스가 있는 차(1.5.4)는 서비스가 Wi-Fi를 꺼 wifi_on이 0으로 바뀌었을 수 있다. 설치 전에 켜져 있었으면

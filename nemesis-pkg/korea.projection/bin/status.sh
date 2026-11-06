@@ -9,13 +9,23 @@ APP=${APP:-/data/nemesis/apps/korea.projection}
 HOTSPOT_LIB=1 . $APP/svc/hotspot.sh
 ISSUES=https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml
 umask 077
-$BB mkdir -p $W 2>/dev/null
+bbx mkdir -p $W 2>/dev/null
+# --wait(1.5.5): Launch를 설치 중에 누르면 뒤에서 한 번 더 돈다. 설치가 끝날 때까지(최대 15분) 기다렸다가 아래 보통
+# 흐름으로 상태 파일·USB 제보 파일을 다시 만든다(그때 USB가 꽂혀 있으면). 상태 화면 앱은 진행 막대를 보여 주다가
+# 상태 파일이 새로 쓰이면 결과 화면으로 바뀐다.
+WAITED=0
+if [ "$1" = --wait ]; then
+  _i=0
+  while $BB grep -q '^state=run$' $PROG 2>/dev/null && [ $_i -lt 180 ]; do sleep 5; _i=$((_i+1)); done
+  rm -f $W/wait.pid
+  WAITED=1
+fi
 
 yn() { if "$@" >/dev/null 2>&1; then echo 예; else echo 아니요; fi; }
 # USB가 마운트돼 있는가 (마운트 지점 폴더는 USB가 없어도 있을 수 있어 /proc/mounts로 본다)
 USBS="/storage/usb0 /storage/usb1"
 usb_in() {
-  for _u in $USBS; do $BB grep -q " $_u " /proc/mounts 2>/dev/null && return 0; done
+  for _u in $USBS; do bbx grep -q " $_u " /proc/mounts 2>/dev/null && return 0; done
   return 1
 }
 # 순정 파일 위치 (테스트에서 바꿀 수 있게)
@@ -29,9 +39,12 @@ pver() { _v=$($BB grep '^package-version=' "$1" 2>/dev/null); echo "${_v#package
 # 안의 파일: 1-report.md(이 스크립트), 2-car-report.json(carreport.sh), 3-log.txt(이 스크립트)
 RDIR=${RDIR:-KoreaProjection-report}
 APLOG=${APLOG:-/data/nemesis/logs/korea.projection/ap.log}
-# busybox가 없는 내비(K3 BDPE, #15): 보통 리포트는 못 만든다. 셸 기본 명령(grep, mkdir, ls)만으로 USB에 짧은
-# 리포트를 남긴다(제품, 플랫폼, 이 내비에 있는 명령 목록: busybox 없이 다시 만들 때 참고). 개인정보는 없다.
+# busybox가 없는 내비(K3 BDPE·K8 GL3HEV, tcc803x, #15·#19): 보통 리포트는 못 만든다. 셸 기본 명령(grep, mkdir, ls)만으로
+# USB에 짧은 리포트를 남긴다(제품, 플랫폼, 이 내비에 있는 명령 목록: busybox 없이 다시 만들 때 참고). 개인정보는 없다.
+# 1.5.5: 상태 화면 앱도 쓴다. 앱이 없으면 다시 설치하고(설치 때 실패했을 수 있음), 앱이 읽을 짧은 상태 파일
+# (support=nobb)을 쓴다. 앱은 오류 대신 "아직 동작하지 않음(조사 중)" 화면을 보인다. 이 셸에는 printf가 없어 echo만 쓴다.
 if ! has_bb; then
+  install_app_once
   _nbw=0
   for u in /storage/usb0 /storage/usb1; do
     grep -q " $u " /proc/mounts 2>/dev/null || continue
@@ -44,12 +57,27 @@ if ! has_bb; then
       echo "- NEMESIS: $(nemesis version 2>/dev/null)"
       echo; echo "## /system/bin"; ls /system/bin
       echo; echo "## /system/xbin"; ls /system/xbin
-    } > "$u/$RDIR/1-report.md" 2>/dev/null && sync && _nbw=1 && break
+    } > "$u/$RDIR/1-report.md" 2>/dev/null
+    # 성공은 파일로 판단한다(묶음의 마지막 명령 ls의 종료 코드로 보지 않음)
+    [ -s "$u/$RDIR/1-report.md" ] && sync && _nbw=1 && break
   done
-  if [ "$_nbw" = 1 ]; then
-    toast "Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다. USB의 KoreaProjection-report 폴더 파일을 제보해 주세요."
-  else
-    toast "Korea Projection: 이 내비에는 busybox가 없어 아직 동작하지 않습니다. USB를 꽂고 Launch를 다시 누르면 제보 파일을 만듭니다."
+  _st=${STATUS:-/data/local/tmp/korea-projection-status.txt}
+  _pv=$(grep '^package-version=' $APP/NEMESIS.data 2>/dev/null)
+  if [ "$_nbw" = 1 ]; then _us=saved; elif usb_in; then _us=fail; else _us=none; fi
+  # .tmp에 쓴 뒤 바꾼다(열려 있는 화면이 반쯤 쓴 파일을 읽지 않게). toolbox mv는 -f 없이 같은 장치에서 덮어쓴다.
+  ( umask 022
+    { echo "support=nobb"
+      echo "product=$(getprop ro.build.product)"
+      echo "platform=$(getprop ro.board.platform)"
+      echo "pkgver=${_pv#package-version=}"
+      echo "usb=$_us"
+      echo "made=$(date '+%m-%d %H:%M')"
+    } > $_st.tmp 2>/dev/null && chmod 644 $_st.tmp 2>/dev/null && mv $_st.tmp $_st 2>/dev/null )
+  # 앱이 있으면 화면이 안내한다. 토스트는 USB에 저장했을 때와, 앱이 없어 화면을 못 띄울 때만.
+  if ! app_installed; then
+    toast "Korea Projection: 이 내비에서는 아직 동작하지 않습니다(지원 조사 중). 무선 설정은 하지 않았습니다."
+  elif [ "$_nbw" = 1 ]; then
+    toast "Korea Projection: 제보 파일을 USB의 KoreaProjection-report 폴더에 저장했습니다."
   fi
   exit 0
 fi
@@ -103,6 +131,7 @@ report() {
   echo "- targetdir (NEMESIS models): $(getprop ro.mobis.targetdir)"
   echo "- onebin: $(getprop ro.mobis.onebindir)"
   echo "- 이 패키지 버전: $(pver $APP/NEMESIS.data)"
+  echo "- 설치 진행: $($BB awk -F= '$1 == "state" || $1 == "pct" || $1 == "stage" { printf "%s=%s  ", $1, $2 }' $PROG 2>/dev/null)"
   if car_in "$prod" "$CARS_OK"; then echo "- 확인된 차: 예"
   elif car_in "$prod" "$CARS_TRY"; then echo "- 확인된 차: 시험 지원 (차에서 아직 확인되지 않음, 결과를 알려 주세요)"
   elif car_in "$prod" "$CARS_AUTO"; then echo "- 확인된 차: 자동 시험 (이 차용 설정 없이 HMG-API가 차에서 지도를 만들어 시도, 결과를 알려 주세요)"
@@ -231,13 +260,7 @@ status_kv() {
 
 # 상태 화면 앱이 없으면(설치 때 실패) 여기서 다시 설치해 본다. 이어서 NEMESIS가 화면을 연다.
 # 한 부팅에 한 번만 (sys.boot_completed를 바꿀 때마다 init의 부팅 완료 트리거가 다시 돌기 때문)
-if ! app_installed; then
-  _bid=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
-  if [ "$(cat $W/app-try 2>/dev/null)" != "$_bid" ]; then
-    echo "$_bid" > $W/app-try
-    install_app >/dev/null 2>&1
-  fi
-fi
+install_app_once
 
 R=$W/korea-projection-report.md
 report > $R 2>/dev/null
@@ -254,6 +277,14 @@ for u in $USBS; do
     && $BB cp $R "$u/$RDIR/1-report.md" 2>/dev/null && $BB cp $G "$u/$RDIR/3-log.txt" 2>/dev/null && sync && where=$u && break
 done
 
+# 설치가 아직 진행 중이면 끝난 뒤에 한 번 더 돌도록 뒤에 남긴다(한 번에 하나만, 이번 부팅의 것만)
+if [ $WAITED = 0 ] && $BB grep -q '^state=run$' $PROG 2>/dev/null; then
+  _wp=$(cat $W/wait.pid 2>/dev/null)
+  if [ -z "$_wp" ] || [ ! -d /proc/$_wp ] || ! $BB grep -q status.sh /proc/$_wp/cmdline 2>/dev/null; then
+    $BB setsid sh $APP/bin/status.sh --wait </dev/null >/dev/null 2>&1 &
+    echo $! > $W/wait.pid
+  fi
+fi
 # 상태는 이어서 열리는 화면(StatusActivity)이 보여 준다. 토스트는 USB에 리포트를 저장했을 때만.
 [ -n "$where" ] || exit 0
 a=off; running "hostapd $CONF" && a=on

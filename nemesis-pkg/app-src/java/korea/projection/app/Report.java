@@ -34,6 +34,20 @@ final class Report {
     boolean yes(String k) { return "yes".equals(v.get(k)); }
     boolean empty() { return v.isEmpty(); }
 
+    /**
+     * busybox가 없는 내비(K3·K8, tcc803x)인가. 1.5.5부터 status.sh가 이런 내비에서는 짧은 상태 파일
+     * (support=nobb, product, platform, pkgver, usb, made)만 쓴다. 무선 설정은 하지 않는다.
+     */
+    boolean nobb() { return "nobb".equals(v.get("support")); }
+
+    /** busybox 없는 내비의 제보 파일 칸: saved(USB에 저장함) / fail(USB에 쓰지 못함) / none(USB 없음) */
+    private String usbCell() {
+        String u = get("usb");
+        if ("saved".equals(u)) return "USB의 KoreaProjection-report 폴더에 저장함";
+        if ("fail".equals(u)) return "USB에 쓰지 못함 (다른 USB로 다시 해 보세요)";
+        return "USB를 꽂고 Launch를 다시 누르면 만듭니다";
+    }
+
     /** README "필요한 것"과 같은 최소 버전 (바꾸면 README와 설치 가이드도 함께 고친다) */
     static final String MIN_HMGAPI = "1.0.2";
     static final String MIN_NEMESIS = "1.16";
@@ -41,6 +55,7 @@ final class Report {
     /** 맨 위 한 줄: 무선 카플레이가 될 준비가 됐는지, 아니면 무엇이 빠졌는지 */
     String verdict() {
         if (empty()) return "상태를 읽지 못했습니다. NEMESIS Manager에서 Launch를 다시 눌러 주세요.";
+        if (nobb()) return "이 내비에서는 아직 동작하지 않습니다(지원 조사 중). 무선 설정은 하지 않았습니다.";
         if (!yes("tested")) return "확인되지 않은 차입니다. 핫스팟은 켜지 않고 대기 중입니다. QR로 제보해 주세요.";
         if (hmgapiVer().isEmpty()) return "HMG-API가 없습니다. HMG-API " + MIN_HMGAPI + " 이상을 설치해 주세요.";
         if (older(hmgapiVer(), MIN_HMGAPI) != 0)
@@ -62,6 +77,7 @@ final class Report {
     /** 0: 좋음, 1: 확인 필요, 2: 문제 (화면 색) */
     int level() {
         if (empty()) return 2;
+        if (nobb()) return 1;
         if (!yes("tested")) return 1;
         if (!yes("feat_carplay")) return 2;
         if (hmgapiVer().isEmpty() || older(hmgapiVer(), MIN_HMGAPI) != 0) return 2;
@@ -71,6 +87,76 @@ final class Report {
         if (!yes("our_ap") || !yes("our_dhcp")) return 1;
         if (older(get("nemesis"), MIN_NEMESIS) != 0) return 1;
         return 0;
+    }
+
+    // --- 설치 진행 기록(1.5.5, 서비스가 쓰는 /data/local/tmp/korea-projection-progress.txt) ---
+    // 이 Report를 진행 기록 파일로 만들었을 때 쓴다. boot는 지금 부팅 id(/proc/sys/kernel/random/boot_id):
+    // 지난 부팅의 기록은 무시한다(재부팅 전 "진행 중"이 남아 있어도 막대를 보이지 않게).
+
+    /** 이번 부팅의 기록인가 */
+    boolean progThisBoot(String boot) {
+        return !empty() && boot != null && boot.trim().equals(get("boot"));
+    }
+
+    /** 진행 기록이 이만큼(초) 새로 쓰이지 않으면 멈춘 것으로 본다(status.sh --wait의 15분과 같다) */
+    static final long STALE = 900;
+
+    /** 이번 부팅에 설치가 진행 중인가(진행 막대를 보일지) */
+    boolean progRunning(String boot) {
+        return progThisBoot(boot) && "run".equals(get("state"));
+    }
+
+    /** progRunning이면서 최근(STALE초 안)에 쓰인 기록인가. now: 지금 시각(초) */
+    boolean progRunning(String boot, long now) {
+        if (!progRunning(boot)) return false;
+        try {
+            return now - Long.parseLong(get("t")) <= STALE;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /** 진행률 0~100 (읽지 못하면 0) */
+    int progPct() {
+        try {
+            int p = Integer.parseInt(get("pct"));
+            return p < 0 ? 0 : p > 100 ? 100 : p;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** 시작한 지 몇 초 (now: 지금 시각 초). 읽지 못하면 -1 */
+    long progElapsed(long now) {
+        try {
+            long s = Long.parseLong(get("start"));
+            return now >= s ? now - s : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /** "3분 05초" */
+    static String mmss(long sec) {
+        if (sec < 0) return "-";
+        long m = sec / 60, ss = sec % 60;
+        return (m > 0 ? m + "분 " : "") + (ss < 10 && m > 0 ? "0" : "") + ss + "초";
+    }
+
+    /**
+     * 설치가 끝난 결과가 맨 위 판정을 대신할 때의 문구. 재부팅 필요·실패만(이번 부팅 기록일 때). 아니면 null.
+     * 재부팅이 필요한데 상태표만 보면 "무선 모드가 없습니다"처럼 보여 사용자가 오해하기 쉽다.
+     */
+    String progVerdict(String boot) {
+        if (!progThisBoot(boot)) return null;
+        String st = get("state");
+        if ("reboot".equals(st) || "fail".equals(st)) return get("stage").isEmpty() ? null : get("stage");
+        return null;
+    }
+
+    /** progVerdict의 색: 재부팅 필요는 노랑(1), 실패는 빨강(2) */
+    int progLevel() {
+        return "fail".equals(get("state")) ? 2 : 1;
     }
 
     /** 훅이 꺼진 이유(HMG-API CarMap 상태)별 안내 */
@@ -144,6 +230,15 @@ final class Report {
     /** 화면 왼쪽 표: {제목, 값}. 필요한 것(버전·모드·훅)을 위에 둔다 */
     List<String[]> rows() {
         List<String[]> out = new ArrayList<String[]>();
+        if (nobb()) {
+            out.add(new String[] { "내비 소프트웨어", get("product") });
+            out.add(new String[] { "내비 종류(플랫폼)", get("platform") });
+            out.add(new String[] { "Korea Projection", get("pkgver") });
+            out.add(new String[] { "지원", "아직 안 됨 (이 내비 종류는 조사 중)" });
+            out.add(new String[] { "무선 설정", "하지 않았습니다 (차의 파일을 바꾸지 않음)" });
+            out.add(new String[] { "제보 파일", usbCell() });
+            return out;
+        }
         out.add(new String[] { "내비 소프트웨어", get("product") });
         out.add(new String[] { "확인된 차", yn("tested") });
         out.add(new String[] { "Korea Projection", get("pkgver") });
@@ -177,7 +272,7 @@ final class Report {
      */
     String issueUrl() {
         // 중요한 것부터: 링크가 길면 뒤에서부터 뺀다 (product는 제목·항목에 따로 들어간다)
-        String[] keys = { "targetdir", "pkgver", "tested", "feat_carplay", "our_ap", "our_dhcp", "other_ap",
+        String[] keys = { "support", "platform", "targetdir", "pkgver", "tested", "feat_carplay", "our_ap", "our_dhcp", "other_ap",
             "cp_conn", "wlan0", "softap_strings", "ssid_len", "pass_len", "wp", "mod", "mod_on", "bridge", "hooks", "hookmap", "feat_aa", "feat_wifi",
             "wpa", "hmgapi", "nemesis", "made" };
         List<String> lines = new ArrayList<String>();

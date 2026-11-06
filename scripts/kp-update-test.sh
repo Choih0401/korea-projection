@@ -29,7 +29,7 @@ BK=${BK:-/data/nemesis/backup/$PKG}
 # 껐다 켜는 동안 USB가 잠깐 떨어졌다 다시 붙는 것으로 보이고, 그 뒤 USB에 쓴 기록이 사라졌다.
 O=$D/out
 UO=$U/kp7
-WANT=1.5.4
+WANT=1.5.5
 # USB가 실제로 붙어 있을 때만 복사 (빈 마운트 지점 폴더에 쓰지 않게)
 copy_out() {
   $BB grep -q " $U " ${MOUNTS:-/proc/mounts} 2>/dev/null || return 0
