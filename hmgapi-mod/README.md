@@ -4,11 +4,11 @@ Korea Projection 패키지에 들어 있는 `nemesis-pkg/korea.projection/hmgapi
 
 ## 바탕이 된 것
 
-- **HMG-API**(VysseCodes, AGPL-3.0)의 "Wireless CarPlay + Android Auto" 모드 **2.1.0**입니다.
+- **HMG-API**(VysseCodes, AGPL-3.0)의 "Wireless CarPlay + Android Auto" 모드입니다. Korea Projection 1.5.1~1.5.6은 업스트림 **2.1.0** 코드 그대로였고, 1.5.7부터는 아래 "1.5.7부터"의 포크 코드입니다(1.7.1은 한국 차 빌드 **2.3.0**).
   - 저장소: https://github.com/Open-HMG/HMG-API (예전 주소 `VysseCodes/HMG-API`에서 옮겨졌습니다)
   - 태그: `v1.0.2` (커밋 `180185de2c57afb2cca4858d0be7828e8f1051d6`)
   - 모드 폴더: `mods/wireless-carplay-aa/`
-- **코드는 업스트림 그대로입니다.** Korea Projection 1.5.1~1.5.6에 든 `hooks.jar`는 업스트림 v1.0.0·v1.0.1·v1.0.2 릴리스의 `hooks.jar`와 바이트까지 같습니다.
+- **1.5.6까지 코드는 업스트림 그대로였습니다.** Korea Projection 1.5.1~1.5.6에 든 `hooks.jar`는 업스트림 v1.0.0·v1.0.1·v1.0.2 릴리스의 `hooks.jar`와 바이트까지 같습니다.
   - SHA-256: `b8525dfc1d0ce7539a5c7d4cae331ddc0464d78394f61ba72172e554fc7e973d`
   - 그 소스는 위 태그의 `mods/wireless-carplay-aa/src/`입니다. `files/`, `recipes/`, `settings.json`, `stubs/`도 업스트림 그대로입니다.
 
@@ -61,6 +61,14 @@ sh tools/mkmodpkg.sh mods/wireless-carplay-aa ~/my-mod.key
 ## 1.5.7부터
 
 계기판·HUD 회전 안내 수정부터 모드의 Java 코드가 업스트림과 달라집니다. 그 코드는 포크 `StopDragon/HMG-API`의 `korea-build` 브랜치(업스트림 `v1.0.2`에서 시작)에 둡니다. 릴리스마다 이 README와 릴리스 설명에 그 커밋과 `hooks.jar` SHA-256을 적습니다.
+
+| Korea Projection | 모드 | 바뀐 코드 | `hooks.jar` SHA-256 |
+|---|---|---|---|
+| 1.5.7 | 2.1.1 | 계기판·HUD 회전 안내(각도 없는 회전, 대체 화살표, 다시 보내기) | 릴리스 설명 참고 |
+| 1.7.0 | 2.2.0 | 무선 안드로이드 오토(우리 핫스팟을 AA에 알림) | `42c2fbb2f0b1cc014154b8a8531b53b3f634753ee11f3fc156eda9c97f5b81ab` |
+| 1.7.1 | 2.3.0 | 계기판·HUD 번호를 순정 한국 내비와 같게(램프·회전교차로·차로 조합, 안드로이드 오토 포함), 무선 카플레이 곡 정보, 디버그 때만 순정 관찰 기록 | `83aac4ca2dada357e031ea06dd058babe874eab7b9c3dc6ddecc981042128ac2`(포크 커밋 `38b4432`, 곡 정보는 `577434c`) |
+
+- 1.7.1의 차로 조합 그림 표는 seogaemo(커밋 `26eeb97`, AGPL-3.0)에서 옮겼습니다. 출처는 소스 파일 머리말에 적었습니다.
 
 ## 라이선스
 

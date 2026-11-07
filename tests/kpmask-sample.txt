@@ -17,3 +17,7 @@
 11-08 01:00:02.400 D/BluetoothPbapClient(  900): FN:Hong Gildong
 11-08 01:56:03.100 D/Iap2Service(  944): send Device info name 시험용폰
 <6>[   12.345678] dhd_module_init: in Dongle Host Driver
+<5>[    0.000000] Kernel command line: console=ttyS0 androidboot.btaddr=A1B2C3D4E5F6 androidboot.wifimac=001122AABBCC androidboot.serialno=KMHXX12345ABC6789XYZ
+11-08 05:00:00.000 D/WifiStateMachine(  600): CONNECTED extra: "HomeWiFi" config "/data/misc/wifi/wpa_supplicant.conf" empty ""
+11-08 05:00:01.000 D/BluetoothAdapterService(  900): remote 9C2F4A7B1E3D bonded
+11-08 01:56:03.000 D/Iap2Service(  944): Iap2SvcInit name 시험폰2

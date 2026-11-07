@@ -34,6 +34,10 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     static final String BOOT_ID = "/proc/sys/kernel/random/boot_id";
     /** 1.7.0: status.sh --collect가 쓰는 제보 자료 저장 진행 기록(644). 토스트 대신 이 화면 맨 위에 보인다 */
     static final String RPROG = "/data/local/tmp/korea-projection-report-progress.txt";
+    /** 1.7.1: svc/hotspot.sh notice가 쓰는 알림 기록(644, 토스트 대신). 이번 부팅의 줄만 보인다 */
+    static final String NOTICE = "/data/local/tmp/korea-projection-notice.txt";
+    /** 알림을 보여 주는 시간(초): 그보다 오래된 안내는 지난 단계의 것이다 */
+    static final long NOTICE_SHOW = 1800;
     /** 저장이 끝난 기록을 결과 화면에 보여 주는 시간(초): 그보다 오래된 완료 기록은 지난 Launch의 것이다 */
     static final int SAVE_SHOW = 600;
     /** 설치가 끝난 뒤 status.sh가 상태 파일을 다시 쓰기를 기다리는 최대 시간(초). 넘으면 있는 대로 보인다. */
@@ -50,7 +54,7 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     TextView saveText;
     long finishedAt;
     ProgressBar bar;
-    TextView pctText, stageText, timeText;
+    TextView pctText, stageText, timeText, noticeText;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -165,6 +169,12 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         line.addView(timeText);
         root.addView(line);
 
+        // 1.7.1: 설치 중 알림(토스트 대신)은 단계 아래에 최근 것 하나
+        noticeText = text("", 17, 0xFFFFE082);
+        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(-1, -2);
+        ntp.topMargin = dp(10);
+        root.addView(noticeText, ntp);
+
         TextView hint = text("설치가 끝날 때까지 기다려 주세요(보통 3~5분). 이 화면을 닫아도 설치는 계속됩니다. "
             + "그동안 내비를 끄거나 재부팅하지 마세요. 끝나면 이 화면이 결과로 바뀝니다.", 16, 0xFFB0B0B0);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
@@ -189,6 +199,21 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         if (pctText != null) pctText.setText(pct + "%");
         if (stageText != null) stageText.setText(p.get("stage"));
         if (timeText != null) timeText.setText("경과 " + Report.mmss(p.progElapsed(now)));
+        if (noticeText != null) {
+            java.util.List<String[]> ns = Report.notices(read(NOTICE), boot, 1, now, NOTICE_SHOW);
+            noticeText.setText(ns.isEmpty() ? "" : "알림 " + clock(ns.get(0)[0]) + "  " + ns.get(0)[1]);
+        }
+    }
+
+    /** 알림 시각(초) → "HH:MM". 읽지 못하면 빈 값 */
+    static String clock(String sec) {
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            c.setTimeInMillis(Long.parseLong(sec) * 1000L);
+            return String.format(java.util.Locale.US, "%02d:%02d", c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     String appVersion() {
@@ -246,7 +271,7 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
 
     /** 결과 화면(1.5.4까지의 화면). 설치 결과가 재부팅 필요·실패면 맨 위 판정을 그 문구로 바꾼다. */
     void showStatus() {
-        bar = null; pctText = null; stageText = null; timeText = null;
+        bar = null; pctText = null; stageText = null; timeText = null; noticeText = null;
         saveBar = null; saveText = null; saving = false;
         Report r = Report.parse(read(STATUS));
         Report p = Report.parse(read(PROG));
@@ -274,6 +299,16 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         vp.topMargin = dp(6);
         vp.bottomMargin = dp(8);
         left.addView(verdict, vp);
+
+        // 1.7.1: 알림(토스트 대신): 이번 부팅의 최근 3개, 새것이 위
+        for (String[] n : Report.notices(read(NOTICE), boot, 3, System.currentTimeMillis() / 1000, NOTICE_SHOW)) {
+            TextView nt = text("알림 " + clock(n[0]) + "  " + n[1], 16, Color.BLACK);
+            nt.setBackgroundColor(0xFFFFE082);
+            nt.setPadding(dp(10), dp(4), dp(10), dp(4));
+            LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
+            np.bottomMargin = dp(4);
+            left.addView(nt, np);
+        }
 
         // 1.7.0: 제보 자료 저장 진행(토스트 대신)
         Report rp = Report.parse(read(RPROG));

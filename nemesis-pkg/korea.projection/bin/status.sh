@@ -80,11 +80,11 @@ if ! has_bb; then
       echo "usb=$_us"
       echo "made=$(date '+%m-%d %H:%M')"
     } > $_st.tmp 2>/dev/null && chmod 644 $_st.tmp 2>/dev/null && mv $_st.tmp $_st 2>/dev/null )
-  # 앱이 있으면 화면이 안내한다. 토스트는 USB에 저장했을 때와, 앱이 없어 화면을 못 띄울 때만.
+  # 1.7.1: 토스트는 쓰지 않는다. 앱이 있으면 화면이 안내하고, USB 저장은 알림 기록으로 화면에 보인다.
   if ! app_installed; then
-    toast "Korea Projection: 이 내비에서는 아직 동작하지 않습니다(지원 조사 중). 무선 설정은 하지 않았습니다."
+    notice "Korea Projection: 이 내비에서는 아직 동작하지 않습니다(지원 조사 중). 무선 설정은 하지 않았습니다."
   elif [ "$_nbw" = 1 ]; then
-    toast "Korea Projection: 제보 파일을 USB의 KoreaProjection-report 폴더에 저장했습니다."
+    notice "Korea Projection: 제보 파일을 USB의 KoreaProjection-report 폴더에 저장했습니다."
   fi
   exit 0
 fi
@@ -117,7 +117,7 @@ logs() {
   echo "# Korea Projection 로그 ($(date '+%Y-%m-%d %H:%M'))"
   echo "제품: $(getprop ro.build.product), 패키지 $(pver $APP/NEMESIS.data)"
   echo "휴대폰 이름, 블루투스 주소, IP 주소, 전화번호는 가렸습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보(폰 이름, 연락처 이름 등)가 보이면 그 줄을 지워 주세요."
-  for _f in $APLOG $NOWLAN_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
+  for _f in $APLOG $NOWLAN_LOG $NOCHIP_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
     echo; echo "== ${_f##*/}"
     if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
   done
@@ -173,11 +173,15 @@ cplog() {
 }
 # 1.7.0: 폰 프로젝션 전체 기록. AA를 시도한 직후(2분 안에) Launch를 눌러야 버퍼에 남아 있다.
 # 태그 + 메시지 낱말로 고르고, KPMASK로 가린다. 가리기 awk가 안 되는 busybox면 아무 줄도 내지 않는다.
-PPTAGS=' [VDIWEF]/(AAProjection|PhoneProjection|WifiP2pService|BluetoothSocket|BluetoothServerSocket|bt-rfcomm|HfDeviceBTCMSppApi|BTCMService|ModeManagerService) *\('
+# 1.7.1: ModeManagerService는 경고·오류(W/E)만 넣는다. V·I·D(isForegroundPackage 등 반복)가 400줄의 80% 넘게 차지해
+# 이 칸이 1분도 못 덮었다(#23·#15 1.7.0 리포트). "phoneprojection" 낱말로 PPKEYS에도 걸리므로 따로 뺀다.
+# AA 단계 자체는 서비스가 ap.log에 계속 남긴다(aa_events).
+PPTAGS=' [VDIWEF]/(AAProjection|PhoneProjection|WifiP2pService|BluetoothSocket|BluetoothServerSocket|bt-rfcomm|HfDeviceBTCMSppApi|BTCMService) *\(| [WE]/ModeManagerService *\('
+PPNOISE=' [VDI]/ModeManagerService *\('
 PPKEYS='[Pp]rojection|[Aa]ndroid ?[Aa]uto|[Rr][Ff][Cc][Oo][Mm][Mm]|WifiStart|WifiInfo|Already AA'
 pplog() {
   echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1 || { echo "(이 내비의 busybox로는 가릴 수 없어 넣지 않음)"; return 0; }
-  logcat -d -v time 2>/dev/null | $BB grep -E "$PPTAGS|$PPKEYS" | $BB awk "$KPMASK" | lastmask 400
+  logcat -d -v time 2>/dev/null | $BB grep -E "$PPTAGS|$PPKEYS" | $BB grep -v -E "$PPNOISE" | $BB awk "$KPMASK" | lastmask 400
 }
 # Wi-Fi 서비스·드라이버·핫스팟 쪽 logcat(1.5.4: 그랜저 하이브리드 #12에서 핫스팟이 30초마다 끊긴 원인을 보려고).
 # 지금 logcat 버퍼에 남은 것만 본다(-d). Wi-Fi 이름·비밀번호·주변 네트워크·기기 이름이 나올 수 있는 줄은
@@ -220,6 +224,12 @@ report() {
   echo "- HMG-API:" $($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
   echo "- wireless.projection 설치: $(yn [ -d /data/nemesis/apps/wireless.projection ])"
   echo "- HMG-API 무선 모드: 설치 $(mod_state) / 켜짐 $(mod_on_state) / 무선 카플레이 설정(bridge) $(bridge_state)"
+  echo "- 무선 모드 판: 차 $(mod_ver) / 패키지 $MOD_VER"
+  if mod_pending; then
+    echo ""
+    echo "**무선 모드가 아직 새 판($MOD_VER)으로 바뀌지 않았습니다.** 내비가 켜지고 약 2분 뒤 자동으로 바꿉니다. 그다음 내비를 재부팅하고 리포트를 다시 만들어 주세요."
+    echo ""
+  fi
   mod_foreign && echo "  - 이 모드는 한국 차용이 아닙니다(Korea Projection이 넣은 것 아님). HMG-API 앱에서 지우고 적용·재부팅하면 한국 차용 모드 설치를 시도합니다"
   echo "- HMG-API 훅(마지막 부팅 기록): $(hooks_state)"
   echo
@@ -328,6 +338,8 @@ status_kv() {
   echo "nemesis=$(nemesis version 2>/dev/null)"
   echo "wp=$(yesno [ -d /data/nemesis/apps/wireless.projection ])"
   echo "mod=$(mod_state)"
+  echo "modver=$(mod_ver)"
+  echo "mod_pending=$(yesno mod_pending)"
   echo "mod_foreign=$(yesno mod_foreign)"
   echo "mod_on=$(mod_on_state)"
   echo "bridge=$(bridge_state)"

@@ -79,8 +79,8 @@ if [ -f $BK/wifi_on ] && [ "$(cat $BK/wifi_on 2>/dev/null)" = 1 ] && [ "$(settin
   settings put global wifi_on 1
 fi
 rm -rf $BK
-am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE \
-  "Korea Projection을 삭제했습니다. 내비를 재부팅하면(RESET 버튼 또는 NEMESIS 재부팅) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg" \
-  --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
+# 1.7.1: 토스트는 쓰지 않는다(상태 화면 앱도 함께 지워지므로 NEMESIS 삭제 출력으로만 알린다). 알림 기록도 지운다.
+rm -f $NOTICE $NOTICE.tmp
+echo "Korea Projection을 삭제했습니다. 내비를 재부팅하면(RESET 버튼 또는 NEMESIS 재부팅) 일반 Wi-Fi가 원래대로 돌아옵니다.$modmsg"
 echo "korea.projection 삭제 완료"
 exit 0

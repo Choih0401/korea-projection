@@ -62,6 +62,8 @@ exit 0
 E
 for c in svc settings; do printf '#!/bin/sh\necho "%s $*" >> %s/calls\necho 1\n' $c $T > $T/bin/$c; done
 printf '#!/bin/sh\necho "$*" > %s/toast\n' $T > $T/bin/am
+# 1.7.1: 패키지는 토스트(am) 대신 알림 기록(NOTICE)에 쓴다. 시험은 구역마다 예전 토스트 파일을 알림 기록으로 쓴다.
+export NOTICE=$T/toast
 printf '#!/bin/sh\ncat %s/ps 2>/dev/null\n' $T > $T/bin/ps
 printf '#!/bin/sh\necho "tcp 0 0 192.168.43.1:7000 192.168.43.23:50000 ESTABLISHED"\n' > $T/bin/netstat
 # 1.7.0 cp_count는 /proc/net/tcp·tcp6·if_inet6을 읽는다(전역 가짜: 192.168.43.1:7000 ESTABLISHED 1개)
@@ -139,7 +141,7 @@ change   /system/onebin/depehev_kr/featurexml.cfg [wireless-carplay-aa] -> 2a7ca
 same     setting prop/persist.ium.support = carplay [wireless-carplay-aa]
 E
 echo "/dev/block/system /system ext4 ro,relatime 0 0" > $T/fp/mounts
-fp() { (cd $T/fp && PATH=$T/fp/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 FIX_DELAY=0 BB=$T/bin/bb W=$T/fp/w PERMS=$T/fp/perms MOUNTS=$T/fp/mounts sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$T'/fp/bin:/usr/bin:/bin:/sbin; fix_perms'); }
+fp() { (cd $T/fp && PATH=$T/fp/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 NOTICE=$T/fp/toast FIX_DELAY=0 BB=$T/bin/bb W=$T/fp/w PERMS=$T/fp/perms MOUNTS=$T/fp/mounts sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$T'/fp/bin:/usr/bin:/bin:/sbin; fix_perms'); }
 fpreset() { rm -rf $T/fp/perms $T/fp/calls $T/fp/toast $T/fp/down; mkdir -p $T/fp/perms; }
 # cwd($T/fp)에 한 글자 이름 "w" 폴더가 있다: "[wireless-carplay-aa]"가 파일 이름 패턴으로 풀리면 "w"로 바뀌어 잡힌다
 fpreset; fp > $T/fp/out
@@ -191,6 +193,34 @@ echo boot-B > $WE/bootid; printf '%s\n' "<6>[   30.5] CFG80211-ERROR) wl_notify_
 check "  재부팅하면(부팅 id가 다름) 커널 시각이 작아도 처음부터 남김" 'grep -q "Wi-Fi: AP 올라옴 (커널 30초)" $WE/out4'
 echo boot-C > $WE/bootid; printf '%s\n' "<6>[    5.8] IPv6: ADDRCONF(NETDEV_CHANGE): ncm0: link becomes ready" "<6>[  300.0] CFG80211-ERROR) wl_cfg80211_del_station : Disconnect STA : ff:ff:ff:ff:ff:ff scb_val.val 3" "<4>[  301.0] dhd_os_send_hang: HANG event sent" > $WE/dmesg; we wifi_events > $WE/out5
 check "  유선 카플레이(NETDEV_CHANGE)는 HANG으로 세지 않고, hostapd 시작 때 모두 비우는 끊김(ff:ff…)도 세지 않음, 진짜 HANG은 남김" '! grep -q "기기 연결 끊김" $WE/out5 && [ "$(grep -c "HANG" $WE/out5)" = 1 ] && grep -q "Wi-Fi 칩 응답 없음(HANG) (커널 301초)" $WE/out5'
+# 1.7.1: 무선 AA 단계 기록(aa_events). 니로 성공 시도(2026-11-08 02:16)의 줄 꼴. 폰 이름(Pixel7·홍길동폰)이 섞여 있다.
+echo boot-A > $WE/bootid
+cat > $WE/aalog <<'E'
+11-08 02:16:26.180 D/PhoneProjection( 1660): [ WirelessPhoneProjectionService ] broadcast action = android.bluetooth.device.action.START_SPP_CONNECT_FOR_CONNECTIVITY
+11-08 02:16:27.850 I/AAProjection(  775): WirelessExplorer : [Pixel7] Sent WifiVersionRequest, Protocol version is 1.0	isRetry :false
+11-08 02:16:27.940 D/AAProjection(  775): WirelessExplorer : 	WifiVersionResponse hasDeviceSerial: true	wirelessSupported = true
+11-08 02:16:31.950 I/PhoneProjection( 1660): [ f ] getWiFiApMode wifiMode = 2
+11-08 02:16:32.120 D/AAProjection(  775): WirelessExplorer : isWifiApEnable = true, mode = 2
+11-08 02:16:32.170 D/AAProjection(  775): WirelessExplorer : [홍길동폰] Sent start request
+11-08 02:16:32.410 I/AAProjection(  775): GalReceiverService : MSG_WIFI_TRANSPORT_INIT retu = 0
+11-08 02:16:33.000 I/OtherApp(  1): Sent start request from someone else
+E
+printf '#!/bin/sh\ncat %s/aalog\n' $WE > $WE/bin/logcat; chmod +x $WE/bin/logcat
+we aa_events > $WE/aa1
+check "1.7.1 AA 단계 기록: 성공 시도 7단계를 순서대로 ap.log에, 이름·다른 태그 줄은 없음" '[ "$(grep -c "안드로이드 오토: " $WE/aa1)" = 7 ] && grep -q "안드로이드 오토: 블루투스로 연결 시작(SPP) (02:16:26.180)" $WE/aa1 && grep -q "폰 무선 지원 true" $WE/aa1 && grep -q "AP 모드 2 " $WE/aa1 && grep -q "AP 켜짐 true 모드 2" $WE/aa1 && grep -q "폰에 Wi-Fi 연결 요청" $WE/aa1 && grep -q "Wi-Fi 연결 준비 결과 0" $WE/aa1 && ! grep -q -E "Pixel7|홍길동|someone" $WE/aa1'
+we aa_events > $WE/aa2
+check "  같은 줄은 다시 남기지 않음(logcat 시각 기억)" '[ ! -s $WE/aa2 ] && grep -q "^boot-A 11-08 02:16:32.410" $WE/w/aatime'
+printf '%s\n' "11-08 02:20:00.000 D/AAProjection(  775): GalReceiverService : Received ACTION_WIRELESS_SPP_CONNECT_TIMEOUT, address = 11:22:33:44:55:66" "11-08 02:20:00.100 W/AAProjection(  775): WirelessExplorer : ==> rfcommDisconnect, Start Wireless Session and Attached, but rfcommDisconnect" "11-08 02:20:01.000 I/PhoneProjection( 1660): [ f ] getWiFiApMode wifiManager.isWifiApEnabled() = false, return APMode.UNKNOWN" >> $WE/aalog
+we aa_events > $WE/aa3
+check "  새 줄만: 시간 초과·RFCOMM 끊김·AP 모드 모름, 주소는 없음" '[ "$(grep -c "안드로이드 오토: " $WE/aa3)" = 3 ] && grep -q "SPP 연결 시간 초과" $WE/aa3 && grep -q "블루투스 RFCOMM 끊김" $WE/aa3 && grep -q "AP 모드 모름" $WE/aa3 && ! grep -q "11:22:33" $WE/aa3'
+rm -f $WE/w/aatime; (AAEV_MAX=3; export AAEV_MAX; we aa_events) > $WE/aa4
+check "  한 번에 최대 AAEV_MAX줄(재시도가 몰려도 ap.log가 넘치지 않음)" '[ "$(grep -c "안드로이드 오토: " $WE/aa4)" = 3 ]'
+printf '%s\n' "11-08 02:20:02.000 E/AAProjection(  775): WirelessExplorer : isWifiApEnable = false !!!" >> $WE/aalog; we aa_events > $WE/aa3b
+check "  mode가 없는 isWifiApEnable 줄(니로 실제 꼴)은 'AP 켜짐 false'만, 시각을 값으로 잘라 오지 않음(리뷰 M2)" 'grep -q "AP 켜짐 false (02:20:02.000)" $WE/aa3b && ! grep -q "모드 [0-9]" $WE/aa3b'
+echo boot-B > $WE/bootid; we aa_events > $WE/aa5
+check "  재부팅(부팅 id가 다름)하면 처음부터 다시 봄" '[ "$(grep -c "안드로이드 오토: " $WE/aa5)" = 11 ]'
+check "  서비스 30초 회차·순정 AP 회차 모두 aa_events를 부름, 리포트 폰 프로젝션 칸은 ModeManagerService V·I·D를 뺌" '[ "$(grep -c "wifi_events; aa_events; cp_watch" $T/app/svc/hotspot.sh)" = 4 ] && grep -q "grep -v -E \"\$PPNOISE\"" $T/app/bin/status.sh && grep -q "^PPNOISE=. \[VDI\]/ModeManagerService" $T/app/bin/status.sh'
+rm -f $WE/bin/logcat $WE/w/aatime; echo boot-A > $WE/bootid
 : > $WE/bootid; printf '%s\n' "<6>[  400.0] ** AP/GO Link up event **" > $WE/dmesg; we wifi_events > $WE/out6; we wifi_events > $WE/out7
 check "  부팅 id를 못 읽어도 같은 줄을 30초마다 다시 남기지 않음" '[ "$(grep -c "AP 올라옴" $WE/out6)" = 1 ] && [ ! -s $WE/out7 ]'
 check "  디버그 로그는 태그와 상관없이 Wi-Fi 이름·비밀번호가 나올 수 있는 줄을 버림, 설치 때 함께 넣은 busybox를 지우지 않음(1.6.2)" 'grep -q "grep -v -i -E .ssid|psk \*\[=:\]|passphrase|password|bssid|key=." $T/app/svc/hotspot.sh && for l in "I/GPM ( 1): wifi ssid HomeNet" "I/GPM ( 1): psk=Secret1" "I/GPM ( 1): PSK : Secret2" "I/GPM ( 1): passphrase x"; do echo "$l" | grep -v -i -E "ssid|psk *[=:]|passphrase|password|bssid|key=" | grep -q . && exit 1; done; echo "I/Iap2Service ( 1): Wifi Access Auth Type :  WPA2_PSK" | grep -v -i -E "ssid|psk *[=:]|passphrase|password|bssid|key=" | grep -q WPA2_PSK && ! grep -q "rm .*bin/busybox" $T/app/scripts/post.sh'
@@ -208,6 +238,12 @@ printf 'wlan0 Link encap:Ethernet\n  inet addr:192.168.43.1  Mask:255.255.255.0\
 check "1.7.0 cp_count: wlan0 IPv4·긴 IPv6·IPv4-in-IPv6만 셈(3), 다른 망·LISTEN·TIME_WAIT·다른 포트·유선(ncm0)은 안 셈" '[ "$(PROCNET=$WE/pn we cp_count)" = 3 ]'
 printf 'wlan0 Link encap:Ethernet\n  inet addr:192.168.1.1  Mask:255.255.255.0\n' > $T/ifc
 check "  순정 AP 차(wlan0 주소가 다름, K3)는 그 주소로 셈(192.168.1.1 1개 + wlan0 IPv6 1개)" '[ "$(PROCNET=$WE/pn we cp_count)" = 2 ]'
+# 1.7.1: 순정 AP가 ap0에 뜨는 차(차에서 본 적 없음): wlan0 IPv4는 없고 ap0이 192.168.1.1
+mkdir -p $WE/sn/ap0; printf 'eth0 x\n' > $T/ifc
+printf '#!/bin/sh\n[ "$1" = ap0 ] && { printf "ap0 Link encap:Ethernet\\n  inet addr:192.168.1.1  Mask:255.255.255.0\\n"; exit 0; }\nexec %s/bin/ifconfig "$@"\n' $T > $WE/bin/ifconfig; chmod +x $WE/bin/ifconfig
+check "1.7.1 cp_count: ap0 같은 인터페이스의 주소도 셈(ap0 IPv4 1개 + wlan0 IPv6 1개)" '[ "$(SYSNET=$WE/sn PROCNET=$WE/pn we cp_count)" = 2 ] && [ "$(SYSNET=$WE/sn we cp_ifs)" = "wlan0 ap0" ]'
+check "  ap0이 없으면 wlan0만(wlan0 IPv6 1개)" '[ "$(SYSNET=$WE/nosn PROCNET=$WE/pn we cp_count)" = 1 ]'
+rm -f $WE/bin/ifconfig; rm -rf $WE/sn
 : > $WE/pn/if_inet6; printf 'eth0 x\n' > $T/ifc
 check "  wlan0 주소를 못 읽으면 0" '[ "$(PROCNET=$WE/pn we cp_count)" = 0 ]'
 rm -f $WE/pn/if_inet6 $WE/pn/tcp6; rm -f $T/ifc
@@ -255,8 +291,10 @@ check "  리포트 3-log.txt에 그 기록 파일이 들어감, 상태 파일 no
 for loc in C en_US.UTF-8; do
   (LC_ALL=$loc; export LC_ALL; we 'awk "$KPMASK"') < $B/tests/kpmask-sample.txt > $WE/km.$loc
 done
-check "1.7.0 가리기: 폰 이름·SSID·비밀번호·MAC·다른 IP가 0건(C·UTF-8)" '! grep -q -E "홍길동|Fold7|Pixel7|GalaxyS24|MyPhone|MyNet|secret|AA:BB|AA-BB|1234 5678|abcdefgh1|10\.0\.0\.5|01098765432|홍길동|Kim Office|0212345678|02-1234-5678|1588-1234|세종대로|Hong Gildong|시험용폰" $WE/km.C $WE/km.en_US.UTF-8 && grep -q "V039.001.260902" $WE/km.C && grep -q "\[   12.345678\] dhd_module_init" $WE/km.C && [ "$(wc -l < $WE/km.C)" = "$(wc -l < $B/tests/kpmask-sample.txt)" ]'
+check "1.7.0 가리기: 폰 이름·SSID·비밀번호·MAC·다른 IP가 0건(C·UTF-8)" '! grep -q -E "홍길동|Fold7|Pixel7|GalaxyS24|MyPhone|MyNet|secret|AA:BB|AA-BB|1234 5678|abcdefgh1|10\.0\.0\.5|01098765432|홍길동|Kim Office|0212345678|02-1234-5678|1588-1234|세종대로|Hong Gildong|시험용폰|시험폰2" $WE/km.C $WE/km.en_US.UTF-8 && grep -q "V039.001.260902" $WE/km.C && grep -q "\[   12.345678\] dhd_module_init" $WE/km.C && [ "$(wc -l < $WE/km.C)" = "$(wc -l < $B/tests/kpmask-sample.txt)" ]'
 check "  원인 자료는 남김: isWifiApEnable 줄, 'Failed to find host IP/BSSID', 핫스팟 주소, pid, 숫자 괄호, 클래스 표시" 'grep -q "isWifiApEnable = false, mode = 0" $WE/km.C && grep -q "Failed to find host IP/BSSID 192.168.43.1" $WE/km.C && grep -q "( 1625)" $WE/km.C && grep -q "connectStatus (4)" $WE/km.C && grep -q "\[ WirelessPhoneProjectionService \]" $WE/km.C'
+check "1.7.1 가리기: 커널 명령줄 btaddr·wifimac·serialno 값, 따옴표 안 SSID, 구분자 없는 MAC이 0건(C·UTF-8)" '! grep -q -E "A1B2C3D4E5F6|001122AABBCC|KMHXX12345|ABC6789XYZ|HomeWiFi|9C2F4A7B1E3D" $WE/km.C $WE/km.en_US.UTF-8 && grep -q "Kernel command line: console=ttyS0 androidboot.btaddr=\[가림" $WE/km.C'
+check "  경로·빈 따옴표는 남김(원인 자료)" 'grep -q "\"/data/misc/wifi/wpa_supplicant.conf\"" $WE/km.C && grep -q "empty \"\"" $WE/km.C'
 check "  디버그 로그 태그에 AAProjection·PhoneProjection·RFCOMM이 있고, 없는 태그(GPM*·GalReceiver*)는 뺌" 'grep -q "^TAGS=.*AAProjection|PhoneProjection.*bt-rfcomm" $PKG/svc/hotspot.sh && ! grep -q "^TAGS=.*GPM\[" $PKG/svc/hotspot.sh'
 check "  디버그 로그 파이프가 KPMASK를 거침, awk가 안 되면 남기지 않음(기본은 꺼짐 그대로)" 'grep -q "awk \"\$KPMASK\" | \$_u >> \$W/cp.log" $PKG/svc/hotspot.sh && grep -q "디버그 로그 안 남김: 가리기" $PKG/svc/hotspot.sh && grep -q "\[ -f \$W/debug \] || return 0" $PKG/svc/hotspot.sh'
 
@@ -362,6 +400,19 @@ vl() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; ver_lt
 check "  ver_lt: 2.1.0<2.1.1, 1.9.9<2.1.1, 2.1<2.1.1, 2.1.1<2.1.10 / 같거나 높거나 숫자 아니면 아님" 'vl 2.1.0 2.1.1 && vl 1.9.9 2.1.1 && vl 2.1 2.1.1 && vl 2.1.1 2.1.10 && ! vl 2.1.1 2.1.1 && ! vl 2.2.0 2.1.1 && ! vl x 2.1.1 && ! vl "" 2.1.1'
 museed; asp > $X/out
 check "1.5.7: 우리가 넣은 2.1.0이 있으면 새 판으로 설치, 적용은 안 함(hooks.jar만: nothing changed), 재부팅 안내" 'grep -q "hmgapid engine install .*/hmgapi/wireless-carplay-aa.zip" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && [ "$(cat $X/bk/mod.upd)" = "$MV 1" ] && grep -qx "state=reboot" $X/prog && grep -q "^stage=무선 모드를 새 판($MV)으로 바꿨습니다" $X/prog && grep -q "새 판($MV)으로 바꿨습니다. 내비를 재부팅" $T/toast && grep -q "업데이트함: 2.1.0 →" $X/out'
+# 1.7.1: 알림 기록(토스트 대신): busybox 차는 최근 5줄만, 644, 임시 파일 안 남음
+NT=$X/nt; rm -f $NT*; for i in 1 2 3 4 5 6 7; do (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 NOTICE=$NT BB=$T/bin/bb W=$X/w sh -c '. '$T'/app/svc/hotspot.sh; notice "Korea Projection: 안내 '$i'"') > /dev/null; done
+check "1.7.1 알림 기록: 최근 5줄(안내 3~7), \"<초> <부팅 id> <문구>\", 644, 임시 파일 없음" '[ "$(wc -l < $NT | tr -d " ")" = 5 ] && head -1 $NT | grep -q "^[0-9][0-9]* [^ ]* 안내 3$" && tail -1 $NT | grep -q " 안내 7$" && [ "$(stat -f %Lp $NT)" = 644 ] && [ -z "$(ls $X | grep "^nt\.")" ]'
+# 1.7.1: 새 판으로 바꾸기 전(부팅 약 2분 안)에 만든 리포트·상태 파일이 "업데이트 대기 중"을 보임(mod_pending)
+mpd() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; mod_pending && echo yes || echo no'); }
+museed; check "1.7.1 모드 업데이트 대기: 우리가 넣은 이전 판이면 yes" '[ "$(mpd)" = yes ]'
+museed; : > $X/bk/mod.pin; check "  되돌리기로 고정(mod.pin)했으면 no" '[ "$(mpd)" = no ]'
+museed; echo "$MV 3" > $X/bk/mod.upd; check "  같은 판을 이미 3번 시도했으면 no" '[ "$(mpd)" = no ]'
+museed; rm -f $X/bk/mod.ours; check "  우리가 넣은 모드가 아니면 no" '[ "$(mpd)" = no ]'
+museed; sed "s/2.1.0/$MV/" $X/hd/mods/wireless-carplay-aa/mod.json > $X/mj && mv $X/mj $X/hd/mods/wireless-carplay-aa/mod.json; check "  이미 새 판이면 no" '[ "$(mpd)" = no ]'
+check "  리포트에 차·패키지 판과 대기 안내, 상태 파일에 modver·mod_pending" 'grep -q "무선 모드 판: 차 \$(mod_ver) / 패키지 \$MOD_VER" $PKG/bin/status.sh && grep -q "아직 새 판(\$MOD_VER)으로 바뀌지 않았습니다" $PKG/bin/status.sh && grep -q "echo \"mod_pending=\$(yesno mod_pending)\"" $PKG/bin/status.sh'
+museed; sed -i '' 's/"2.1.0"/"2.2.0"/' $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out
+check "1.7.1: 우리가 넣은 2.2.0(1.7.0)이 있으면 2.3.0으로 설치, 재부팅 안내" '[ "$MV" = 2.3.0 ] && grep -q "hmgapid engine install .*/hmgapi/wireless-carplay-aa.zip" $X/calls && grep -q "업데이트함: 2.2.0 → 2.3.0" $X/out && grep -qx "state=reboot" $X/prog'
 museed; echo "$MV 3" > $X/bk/mod.upd; asp > $X/out
 check "  같은 버전을 이미 3번 시도했으면(mod.upd) 다시 하지 않음" '! grep -q "engine install" $X/calls'
 museed; echo "$MV 1" > $X/bk/mod.upd; asp > $X/out
@@ -410,6 +461,8 @@ check "되돌리기 USB: 스크립트 앞에 umask 077, 셸 문법" 'grep -qx "u
 check "  USB의 되돌리기 zip이 1.5.6 패키지 모드(2.1.0)의 md5와 같음" '[ "$(md5sum < $B/usb-modrollback/kp-rollback/wireless-carplay-aa-2.1.0.zip | cut -c1-32)" = "$(sed -n "s/^OLD_MD5=//p" $RBS)" ] && [ "$(unzip -p $B/usb-modrollback/kp-rollback/wireless-carplay-aa-2.1.0.zip hooks.jar | shasum -a 256 | cut -c1-8)" = b8525dfc ]'
 rbreset; rb
 check "  2.1.1 → --force로 2.1.0 설치, 고정(mod.pin), 적용, 재부팅 안내, 기록을 USB에 남김" 'grep -q "hmgapid engine install .*wireless-carplay-aa-2.1.0.zip --force" $X/calls && grep -qx "hmgapid engine apply" $X/calls && [ -f $RB/bk/mod.pin ] && grep -q "이전 판(2.1.0)으로 되돌렸습니다. 내비를 재부팅" $T/toast && [ -f $RB/usb/kp-rollback/log/rollback.log ]'
+rbreset; sed -i '' 's/"2.1.1"/"2.3.0"/' $RB/hd/mods/wireless-carplay-aa/mod.json; rb
+check "  1.7.1: 2.3.0에서도 --force로 2.1.0 설치·고정(되돌리기 USB를 그대로 씀)" 'grep -q "hmgapid engine install .*wireless-carplay-aa-2.1.0.zip --force" $X/calls && [ -f $RB/bk/mod.pin ]'
 rbreset; echo "x" >> $RB/usb/kp-rollback/wireless-carplay-aa-2.1.0.zip; rb
 check "  zip이 맞지 않으면 아무것도 바꾸지 않음" '! grep -q "engine install" $X/calls 2>/dev/null && [ ! -f $RB/bk/mod.pin ] && grep -q "맞지 않습니다" $T/toast'
 rbreset; touch $X/inst_fail; rb; rm -f $X/inst_fail
@@ -569,7 +622,7 @@ SPS2="  78 nobody    dnsmasq --keep-in-foreground --no-resolv --no-poll --dhcp-a
 stockps() { printf '%s\n' "$SPS1" "$SPS2"; }
 sconf() { printf 'interface=wlan0\ndriver=nl80211\nctrl_interface=/data/misc/wifi/hostapd\nssid=%s\nchannel=149\nhw_mode=a\nwpa_passphrase=word77x\n' "$1" > $SK/stock/hostapd.conf; }
 skreset() { rm -rf $SK/w $SK/bk $SK/hd $SK/calls $SK/toast $SK/prog $SK/ps $SK/ps.* $SK/hostapd-kp.conf $SK/wifi $SK/out; mkdir -p $SK/w $SK/bk $SK/hd/mods/wireless-carplay-aa $SK/wifi; echo "ctrl_interface=wlan0" > $SK/wifi/wpa_supplicant.conf; chmod 644 $SK/wifi/wpa_supplicant.conf; echo '{"system": [{"region": "KOR"}]}' > $SK/hd/mods/wireless-carplay-aa/mod.json; echo BDPE.KOR.0000.V039.001.260902 > $SK/product; : > $SK/ps; sconf 'SSID\cX'; }
-skrun() { (PATH=$SK/bin:$T/bin:/usr/bin:/bin:/sbin env HOTSPOT_LIB=1 BB=$T/bin/bb W=$SK/w BK=$SK/bk HMGDATA=$SK/hd PROG=$SK/prog BOOT_ID=$SK/bootid PROC=$SK/proc CONF=$SK/hostapd-kp.conf SRC=$T/softap.conf WCONF=$SK/wifi/wpa_supplicant.conf WIFI_WAIT=0 OLDPKG=$SK/none WPDIR=$SK/none KT=$SK/w/kt "$@" ${SKSH:-sh} -c '. '$T'/app/svc/hotspot.sh; export PATH='$SK'/bin:'$T'/bin:/usr/bin:/bin:/sbin; fix_perms() { :; }; kill() { echo "kill $*" >> '$SK'/calls; }; _wc=0; wait() { _wc=$((_wc+1)); [ -f '$SK'/ps.$_wc ] && cp '$SK'/ps.$_wc '$SK'/ps; [ -f '$SK'/conf.$_wc ] && cp '$SK'/conf.$_wc '$SK'/stock/hostapd.conf; [ $_wc -ge ${SKW:-1} ] && exit 7; return 0; }; main') > $SK/out 2>&1; echo "rc=$?" >> $SK/out; }
+skrun() { (PATH=$SK/bin:$T/bin:/usr/bin:/bin:/sbin env HOTSPOT_LIB=1 NOTICE=$SK/toast BB=$T/bin/bb W=$SK/w BK=$SK/bk HMGDATA=$SK/hd PROG=$SK/prog BOOT_ID=$SK/bootid PROC=$SK/proc CONF=$SK/hostapd-kp.conf SRC=$T/softap.conf WCONF=$SK/wifi/wpa_supplicant.conf WIFI_WAIT=0 OLDPKG=$SK/none WPDIR=$SK/none KT=$SK/w/kt "$@" ${SKSH:-sh} -c '. '$T'/app/svc/hotspot.sh; export PATH='$SK'/bin:'$T'/bin:/usr/bin:/bin:/sbin; fix_perms() { :; }; kill() { echo "kill $*" >> '$SK'/calls; }; _wc=0; wait() { _wc=$((_wc+1)); [ -f '$SK'/ps.$_wc ] && cp '$SK'/ps.$_wc '$SK'/ps; [ -f '$SK'/conf.$_wc ] && cp '$SK'/conf.$_wc '$SK'/stock/hostapd.conf; [ $_wc -ge ${SKW:-1} ] && exit 7; return 0; }; main') > $SK/out 2>&1; echo "rc=$?" >> $SK/out; }
 # 우리 것을 하나도 하지 않았는가(svc wifi, hostapd·dnsmasq 시작, kill, Wi-Fi 잠금 파일)
 noours() { ! grep -q -E "^(svc|hostapd|dnsmasq|kill|killall) " $SK/calls 2>/dev/null && [ "$(stat -f %Lp $SK/wifi/wpa_supplicant.conf)" = 644 ] && [ "$(cat $SK/wifi/wpa_supplicant.conf)" = "ctrl_interface=wlan0" ] && [ -z "$(ls $SK/wifi | grep -v "^wpa_supplicant.conf$")" ]; }
 skreset; stockps > $SK/ps; skrun SKW=3
@@ -619,7 +672,7 @@ check "1.6.2: 확인된 차(니로)는 바뀌지 않음: 순정 판정·기다�
 skreset; echo DEPEHEV.KOR.0000.V039.001.260902 > $SK/product; skrun BB= BB_SYS=$SK/none BB_OWN=$T/bin/bb; /bin/sleep 1  # 뒤에서 뜬 가짜 hostapd·dnsmasq가 기록을 쓸 틈
 check "  확인된 차는 함께 넣은 busybox여도 순정 AP를 기다리지 않음" '! grep -q "최대 90초" $SK/out && grep -q "^hostapd " $SK/calls'
 # 우리 핫스팟이 도는 중에 순정 카플레이 AP가 켜짐(ap_yield)
-skl() { (PATH=$SK/bin:$T/bin:/usr/bin:/bin:/sbin env HOTSPOT_LIB=1 BB=$T/bin/bb W=$SK/w BK=$SK/bk HMGDATA=$SK/hd PROG=$SK/prog BOOT_ID=$SK/bootid PROC=$SK/proc CONF=$SK/hostapd-kp.conf SRC=${SKSRC:-$T/softap.conf} KT=$SK/w/kt sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$SK'/bin:'$T'/bin:/usr/bin:/bin:/sbin; kill() { echo "kill $*" >> '$SK'/calls; }; wait() { exit 7; }; parse_conf $SRC; '"$1"); }
+skl() { (PATH=$SK/bin:$T/bin:/usr/bin:/bin:/sbin env HOTSPOT_LIB=1 NOTICE=$SK/toast BB=$T/bin/bb W=$SK/w BK=$SK/bk HMGDATA=$SK/hd PROG=$SK/prog BOOT_ID=$SK/bootid PROC=$SK/proc CONF=$SK/hostapd-kp.conf SRC=${SKSRC:-$T/softap.conf} KT=$SK/w/kt sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$SK'/bin:'$T'/bin:/usr/bin:/bin:/sbin; kill() { echo "kill $*" >> '$SK'/calls; }; wait() { exit 7; }; parse_conf $SRC; '"$1"); }
 skreset; mkdir -p $SK/proc/91; echo "91 (dnsmasq) S 1 91" > $SK/proc/91/stat; echo "91 boot-sk" > $SK/w/dnsmasq.pid
 { echo "  90 wifi      hostapd $SK/hostapd-kp.conf"; stockps; echo "  91 root      dnsmasq --keep-in-foreground --no-resolv --no-poll --dhcp-authoritative --pid-file"; } > $SK/ps
 skl 'prod=BDPE.KOR.0000.V039.001.260902; ap_yield' > $SK/out 2>&1
@@ -708,7 +761,7 @@ exit 0
 E
 printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $X > $X/bin/am
 chmod +x $X/bin/svc $X/bin/am
-aw() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi SDIO=$X/sdio WAKE_MAX=100 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
+aw() { (PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 NOTICE=$X/toasts BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd KP_HMG=$T/app/hmgapi SDIO=$X/sdio WAKE_MAX=100 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$X'/bin:'$T'/bin:/usr/bin:/bin:/sbin; setup_hmgapi'); }
 awreset() { asreset; rm -rf $X/sdio $X/chip_ok $X/chip_drop $X/toasts; rm -f $X/hd/public/wifi-chip; mkdir -p $X/sdio; echo 0 > $X/bk/wifi_on; }
 asreset; rm -f $X/toasts; as > $X/out
 check "Wi-Fi 칩 기록이 있으면 Wi-Fi를 건드리지 않음" '! grep -q "svc wifi" $X/calls && grep -q "engine install" $X/calls && ! grep -q "Wi-Fi를 한 번 켭니다" $X/toasts'
@@ -721,6 +774,7 @@ awreset; touch $X/chip_ok $X/chip_drop; aw > $X/out; rm -f $X/calls $X/toasts; a
 check "칩이 잠깐 보였다 사라져 설치가 실패해도 다음 부팅에 Wi-Fi를 다시 켜지 않음 (wifi.woke)" '[ -f $X/bk/wifi.woke ] && ! grep -q "svc wifi" $X/calls && ! grep -q "engine install" $X/calls && [ ! -s $X/toasts ]'
 awreset; aw > $X/out
 check "Wi-Fi를 켜도 칩이 안 나타나면 모드 설치 안 함, wifi.nochip, 재부팅·제보 안내" '! grep -q "engine install" $X/calls && [ -f $X/bk/wifi.nochip ] && [ ! -f $X/bk/mod.tried ] && grep -q "Wi-Fi 칩을 찾지 못해.*재부팅" $X/toasts'
+check "  1.7.1: 그때의 순정 Wi-Fi 기록을 nochip-wifi.txt에 남김(가림: MAC·SSID 없음), 로그에 그 파일 이름" 'grep -q "칩 깨우기 실패 기록" $X/w/nochip-wifi.txt && grep -q "## logcat" $X/w/nochip-wifi.txt && grep -q "SUP_DISCONNECTION_EVENT" $X/w/nochip-wifi.txt && ! grep -q -E "a1:b2|MyHomeNet" $X/w/nochip-wifi.txt && grep -q "nochip-wifi.txt" $X/out'
 check "  설치 전에 Wi-Fi가 꺼져 있었으면 다시 끔" 'grep -qx "svc wifi disable" $X/calls'
 rm -f $X/calls $X/toasts; aw > $X/out
 check "  다음 부팅: Wi-Fi를 다시 켜지 않고, 토스트도 없음" '! grep -q "svc wifi" $X/calls && ! grep -q "engine install" $X/calls && [ ! -s $X/toasts ]'
@@ -798,7 +852,7 @@ chmod +x $WF/bin/*
 WC=$WF/wifi/wpa_supplicant.conf; WR=$WF/wifi/wpa_supplicant_crc32.conf
 wfreset() { rm -rf $WF/calls $WF/toasts $WF/bk $WF/w $WF/wlan0 $WF/out $WF/ps $WF/wifi $WF/prog; mkdir -p $WF/bk $WF/w $WF/wifi $WF/wlan0; }
 wfsys() { echo "ctrl_interface=wlan0" > $WC; echo 1000:1010 > $WC.owner; echo crc > $WR; echo 1000:1010 > $WR.owner; }
-wf() { (PATH=$WF/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$WF/w BK=$WF/bk WLAN=$WF/wlan0 WCONF=$WC WIFI_WAIT=0 PROG=$WF/prog BOOT_ID=$WF/bootid sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WF'/bin:'$T'/bin:/usr/bin:/bin:/sbin; sleep() { :; }; wait() { exit 7; }; '"$1") > $WF/out 2>&1; echo $? >> $WF/out; }
+wf() { (PATH=$WF/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 NOTICE=$WF/toasts BB=$T/bin/bb W=$WF/w BK=$WF/bk WLAN=$WF/wlan0 WCONF=$WC WIFI_WAIT=0 PROG=$WF/prog BOOT_ID=$WF/bootid sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WF'/bin:'$T'/bin:/usr/bin:/bin:/sbin; sleep() { :; }; wait() { exit 7; }; '"$1") > $WF/out 2>&1; echo $? >> $WF/out; }
 wfreset; wfsys; wf 'wifi_lock; echo rc=$?'
 check "Wi-Fi 잠금: system:wifi 설정 파일을 root 소유(660)로, crc32 파일은 백업 뒤 치움, 원래 소유자 기록" '[ "$(cat $WC.owner)" = 0:0 ] && [ ! -e $WR ] && [ "$(cat $WF/bk/wpaconf.orig)" = "1000:1010 660" ] && [ "$(cat $WF/bk/wpacrc.bak)" = crc ] && grep -qx "rc=0" $WF/out && grep -q "Wi-Fi 잠금: 설정 파일을 root 소유로" $WF/out'
 wfsys; wf 'wifi_lock; echo rc=$?'
@@ -837,13 +891,13 @@ sed -e "s#^BB=.*#BB=$T/bin/bb#" -e "s#^BK=.*#BK=$PU/bk#" -e "s#/data/nemesis/app
 pureset() { rm -rf $PU/bk $X/calls $T/toast $X/hd; mkdir -p $PU/bk $X/hd/mods/wireless-carplay-aa; echo '{"system": [{"region": "KOR"}]}' > $X/hd/mods/wireless-carplay-aa/mod.json; }
 pu() { (HMGDATA=$X/hd W=$PU/w sh $PU/preun.sh) > $PU/out 2>&1; }
 pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/onebin/depehev_kr/featurexml.cfg (stock)" "setting  prop/persist.sys.iap2.wifi back to stock" > $X/plan; pu
-check "삭제: 우리가 설치한 모드는 remove → 계획이 되돌리기뿐 → 적용, 토스트에 알림" 'grep -qx "hmgapid engine remove wireless-carplay-aa" $X/calls && grep -qx "hmgapid engine apply" $X/calls && grep -q "무선 모드도 지웠습니다" $T/toast'
+check "삭제: 우리가 설치한 모드는 remove → 계획이 되돌리기뿐 → 적용, 삭제 출력에 알림(1.7.1: 토스트 없음, 알림 기록도 지움)" 'grep -qx "hmgapid engine remove wireless-carplay-aa" $X/calls && grep -qx "hmgapid engine apply" $X/calls && grep -q "무선 모드도 지웠습니다" $PU/out && [ ! -f $T/toast ]'
 pureset; pu
 check "  원래 있던 모드(mod.ours 없음)는 건드리지 않음" '! grep -q "engine remove" $X/calls && [ -f $X/hd/mods/wireless-carplay-aa/mod.json ]'
 pureset; : > $PU/bk/mod.ours; echo "$FMJ" > $X/hd/mods/wireless-carplay-aa/mod.json; pu
 check "  1.6.1: mod.ours가 남아 있어도 지금 모드가 한국 차 빌드가 아니면(차주가 넣은 기본판) 지우지 않음" '! grep -q "engine remove" $X/calls && [ "$(cat $X/hd/mods/wireless-carplay-aa/mod.json)" = "$FMJ" ]'
 pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/x (stock)" "change   /system/app/Y.apk [other-mod] -> 1" > $X/plan; pu
-check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $T/toast'
+check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $PU/out'
 pureset; : > $PU/bk/mod.ours; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data; pu; rm -rf $PU/stage
 check "  업데이트 중(staging에 새 버전)에는 모드를 지우지 않음" '! grep -q "engine remove" $X/calls'
 pureset; echo "1000:1010 660" > $PU/bk/wpaconf.orig; mkdir -p $PU/wifi; echo x > $PU/wifi/c.conf; echo 0:0 > $PU/wifi/c.conf.owner; rm -f $T/calls
@@ -871,7 +925,7 @@ pureset; echo null > $PU/bk/wifi_on; echo 0 > $X/wifiset; rm -f $T/calls; pu
 check "  설치 전에 꺼져 있었으면 1로 바꾸지 않음" '! grep -q "settings put" $T/calls 2>/dev/null'
 rm -f $X/bin/settings $X/wifiset
 pureset; : > $PU/bk/mod.ours; touch $X/down; pu; rm -f $X/down
-check "  HMG-API 데몬이 응답하지 않으면 지우지 못하니 앱에서 지우라고 안내" '! grep -q "engine remove" $X/calls && grep -q "HMG-API 앱에서 무선 모드" $T/toast'
+check "  HMG-API 데몬이 응답하지 않으면 지우지 못하니 앱에서 지우라고 안내" '! grep -q "engine remove" $X/calls && grep -q "HMG-API 앱에서 무선 모드" $PU/out'
 rm -f $T/toast
 
 # --- 1c. 상태 화면 앱: Report(판단·제보 링크)와 QR 크기, QrCode가 HMG-API 원본과 같은지 ---
@@ -988,7 +1042,7 @@ printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: mapped for Kia Ni
 HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
 R=$T/usb0/KoreaProjection-report/1-report.md
 G3=$T/usb0/KoreaProjection-report/3-log.txt
-check "상태 화면용 파일: 644, 키 32개(1.6.1 mod_foreign, 1.6.2 stock_ssid·ap_mode·stock_seen, 1.7.0 state·aa·nowlan 추가)" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 32 ] && grep -qx "nowlan=no" $STF && grep -qx "mod_foreign=no" $STF && grep -q "^state=" $STF && grep -qx "aa=yes" $STF'
+check "상태 화면용 파일: 644, 키 34개(1.6.1 mod_foreign, 1.6.2 stock_ssid·ap_mode·stock_seen, 1.7.0 state·aa·nowlan, 1.7.1 modver·mod_pending 추가)" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 34 ] && grep -q "^modver=" $STF && grep -qx "mod_pending=no" $STF && grep -qx "nowlan=no" $STF && grep -qx "mod_foreign=no" $STF && grep -q "^state=" $STF && grep -qx "aa=yes" $STF'
 check "  1.6.2: 우리 hostapd만 돌면 ap_mode=ours, stock_ssid=none" 'grep -qx "ap_mode=ours" $STF && grep -qx "stock_ssid=none" $STF && grep -q "ap_mode=ours (순정 hostapd 판정: none" $R'
 # 1.7.0: 재부팅 전 리포트 표시, QR용 state, 무선 안드로이드 오토(시험) 켜기·끄기(Launch 때 USB 파일)
 echo boot17 > $T/boot17; printf 'pct=100\nstate=reboot\nstage=x\nboot=boot17\n' > $T/prog17
@@ -1319,11 +1373,14 @@ check "USB에 zip이 없으면 시작 안 함" '[ "$(urun)" = none ] && grep -q 
 # --- 1.5.4: busybox가 없는 내비(K3 #15), 설치 문구, 설정 중 안내, 앱 설치 기록 ---
 NB=$T/nb; rm -rf $NB; mkdir -p $NB/bin $NB/bk $NB/w $NB/hd/maps
 printf '#!/bin/sh\necho "$*" >> %s/toasts\n' $NB > $NB/bin/am
+export NOTICE=$NB/toasts
 printf '#!/bin/sh\necho "pm $*" >> %s/calls\necho Failure\n' $NB > $NB/bin/pm
 chmod +x $NB/bin/*
 # toolbox만 있는 PATH(K3 탐사로 확인한 명령만): 차에 없는 printf·awk·sed·head·tail·stat을 부르면 "not found"가 난다
 mkdir -p $NB/tb
-for c in cp mv rm mkdir chmod ls cat grep date sleep sync; do ln -sf "$(command -v $c)" $NB/tb/$c; done
+for c in cp rm mkdir chmod ls cat grep date sleep sync; do ln -sf "$(command -v $c)" $NB/tb/$c; done
+# 1.7.1: 차의 toolbox mv는 옵션을 모른다(-f를 파일 이름으로 봄, 리뷰 H1). 첫 인자가 -로 시작하면 실패하게 흉내 낸다.
+printf '#!/bin/sh\ncase "$1" in -*) echo "mv: $1: No such file" >&2; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v mv)" > $NB/tb/mv
 cp $NB/bin/am $NB/bin/pm $NB/tb/
 printf '#!/bin/sh\ncase "$1" in sys.boot_completed) echo 1 ;; *) echo TEST ;; esac\n' > $NB/tb/getprop
 printf '#!/bin/sh\necho "setprop $*" >> %s/setprop.log\n' $NB > $NB/tb/setprop
@@ -1340,6 +1397,7 @@ echo apk > $NB/fake.apk
 sed -e "s#^export PATH=.*#export PATH=$TB#" -e "s#; export PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin#; export PATH=$TB#" $NB/post.sh > $NB/post-tb.sh
 rm -f $NB/toasts $NB/calls $NB/w/app-install.log $NB/setprop.log; (W=$NB/w APK_SRC=$NB/fake.apk APK_COPY=$NB/copy.apk /bin/sh $NB/post-tb.sh) > $NB/out 2>&1; echo $? >> $NB/out
 check "설치: busybox가 없으면 무선 설정 없이 '아직 동작하지 않습니다(지원 조사 중)' 안내, 성공(0)으로 끝남" 'grep -q "아직 동작하지 않습니다(지원 조사 중)" $NB/toasts && ! grep -q busybox $NB/toasts && [ "$(tail -1 $NB/out)" = 0 ]'
+check "  1.7.1: 알림 기록 한 줄(\"<초> <부팅 id> <문구>\", 644)이 toolbox mv(옵션 없음)로도 생기고 임시 파일이 남지 않음(리뷰 H1·L1)" 'grep -q "^[0-9][0-9]* [^ ]* 이 내비에서는 아직 동작하지 않습니다" $NB/toasts && [ "$(stat -f %Lp $NB/toasts)" = 644 ] && [ -z "$(ls $NB | grep "^toasts\.")" ]'
 check "  1.5.5: busybox가 없어도 상태 화면 앱은 toolbox 명령으로 설치를 시도하고 결과를 남김(실패해도 성공)" 'grep -q "^pm install -r $NB/copy.apk" $NB/calls && grep -q "pm install: Failure" $NB/w/app-install.log && [ -f $NB/copy.apk ]'
 check "  toolbox 명령만으로 끝남(not found 없음), 부팅 완료 표시를 0으로 내렸다가 1로 되돌림" '! grep -q "not found" $NB/out && [ "$(cat $NB/setprop.log)" = "$(printf "setprop sys.boot_completed 0\nsetprop sys.boot_completed 1")" ]'
 rm -f $NB/toasts $NB/calls; (W=$NB/w APK_SRC=$NB/none.apk APK_COPY=$NB/copy2.apk /bin/sh $NB/post-tb.sh) > $NB/out 2>&1; echo $? >> $NB/out
@@ -1398,6 +1456,7 @@ echo "x 1" > $NB/bk/map.bad; check "  시험 지원 차 지도 확인 실패 기
 check "서비스: 무선 모드 대기에 들어갈 때 설정 중이면 한 번 기록하고 재부팅하지 말라고 안내" 'grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "if setup_pending; then" && grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "setup.told"'
 check "그랜저IG 2.5: 시험 지원 목록, 지도, 패치 세트 연결" '(HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; car_in IGPE.KOR.0000.V039.001.260902 \"\$CARS_TRY\"") && grep -q "\"IGPE.KOR.\"" $T/app/hmgapi/maps/hyundai/grandeur-gasoline/kor/260902/car.json'
 
+export NOTICE=$T/toast
 # ---- 1.6.0: busybox 고르기(내비의 것, 없으면 패키지에 함께 넣은 busybox 1.36.1) ----
 BS=$T/bsel; mkdir -p $BS/sys $BS/own $BS/w
 printf '#!/bin/sh\nexec "$@"\n' > $BS/sys/busybox; chmod 755 $BS/sys/busybox

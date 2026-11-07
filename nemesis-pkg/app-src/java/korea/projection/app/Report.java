@@ -234,8 +234,45 @@ final class Report {
         if ("no".equals(get("mod"))) return "없음 (필요)";
         if ("no".equals(get("mod_on"))) return "꺼짐 (켜야 함)";
         if ("off".equals(get("bridge"))) return "켜짐, Wireless CarPlay 설정 꺼짐";
-        if (yes("mod_on")) return "켜짐";
+        if (yes("mod_on")) return "켜짐" + pendingNote();
         return yn("mod");
+    }
+
+    /** 1.7.1: 우리가 넣은 모드가 패키지의 새 판으로 바뀌기를 기다리는 중(부팅 약 2분 뒤 자동). 차의 판을 함께 보인다 */
+    private String pendingNote() {
+        if (!yes("mod_pending")) return get("modver").isEmpty() ? "" : " (" + get("modver") + ")";
+        return " (" + (get("modver").isEmpty() ? "이전 판" : get("modver")) + ", 새 판으로 바꾸기 대기 중)";
+    }
+
+    /**
+     * 1.7.1: 알림 기록(svc/hotspot.sh notice, 토스트 대신). 한 줄에 "<시각(초)> <부팅 id> <문구>".
+     * 이번 부팅의 줄만, 새것부터 최대 max개. 돌려주는 값은 {시각(초), 문구}.
+     * now·maxAge(초)를 주면 그보다 오래된 줄은 뺀다(지난 단계의 안내가 계속 남아 오해하지 않게, 리뷰 M3).
+     */
+    static List<String[]> notices(String text, String boot, int max) {
+        return notices(text, boot, max, 0, 0);
+    }
+
+    static List<String[]> notices(String text, String boot, int max, long now, long maxAge) {
+        List<String[]> out = new ArrayList<String[]>();
+        if (text == null || boot == null || boot.isEmpty()) return out;
+        String[] lines = text.split("\n");
+        for (int i = lines.length - 1; i >= 0 && out.size() < max; i--) {
+            String l = lines[i].trim();
+            int a = l.indexOf(' ');
+            int b = a < 0 ? -1 : l.indexOf(' ', a + 1);
+            if (b < 0) continue;
+            if (!boot.equals(l.substring(a + 1, b))) continue;
+            String msg = l.substring(b + 1).trim();
+            if (msg.isEmpty()) continue;
+            if (maxAge > 0) {
+                long t;
+                try { t = Long.parseLong(l.substring(0, a)); } catch (NumberFormatException e) { continue; }
+                if (now - t > maxAge) continue;
+            }
+            out.add(new String[] { l.substring(0, a), msg });
+        }
+        return out;
     }
 
     /** 버전 칸: 값 옆에 필요 조건을 붙인다 */
@@ -299,12 +336,14 @@ final class Report {
         // 중요한 것부터: 링크가 길면 뒤에서부터 뺀다 (product는 제목·항목에 따로 들어간다)
         String[] keys = { "support", "state", "platform", "targetdir", "pkgver", "tested", "feat_carplay", "ap_mode", "our_ap", "our_dhcp", "other_ap", "stock_ssid", "stock_seen",
             "cp_conn", "aa", "nowlan", "wlan0", "softap_strings", "ssid_len", "pass_len", "wp", "mod", "mod_on", "bridge", "hooks", "hookmap", "feat_aa", "feat_wifi",
-            "wpa", "hmgapi", "nemesis", "made" };
+            "wpa", "hmgapi", "nemesis", "made", "modver" };
         List<String> lines = new ArrayList<String>();
         lines.add("(QR summary)");
         for (String k : keys) if (v.containsKey(k)) lines.add(k + ": " + v.get(k));
         // mod_foreign은 yes일 때만(링크 길이를 아낀다), 앞쪽에 넣는다
         if (yes("mod_foreign")) lines.add(1, "mod_foreign: yes");
+        // 1.7.1: 모드 업데이트 대기도 yes일 때만 앞쪽에(리포트를 새 판 전에 만들었다는 표시)
+        if (yes("mod_pending")) lines.add(1, "mod_pending: yes (" + get("modver") + ")");
         String url = build(lines);
         while (url.length() > MAX_URL && lines.size() > 2) {
             lines.remove(lines.size() - 1);

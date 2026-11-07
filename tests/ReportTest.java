@@ -167,6 +167,21 @@ public class ReportTest {
             && row(Report.parse(GOOD + "aa=no\n"), "무선 안드로이드 오토 기능").endsWith("· 꺼짐(kp-aa-off)") && Report.parse(GOOD + "aa=yes\n").rows().size() == 15);
         String nq = java.net.URLDecoder.decode(Report.parse(GOOD + "state=reboot\naa=yes\nnowlan=yes\n").issueUrl(), "UTF-8");
         check("  QR 요약에 state·aa·nowlan", nq.contains("state: reboot") && nq.contains("aa: yes") && nq.contains("nowlan: yes"));
+        // 1.7.1: 알림 기록(토스트 대신), 모드 업데이트 대기
+        String nt = "1700000000 boot-A 첫 안내\n1700000100 boot-B 지난 부팅 안내\n1700000200 boot-A 두 번째 안내\n1700000300 boot-A 세 번째\n1700000400 boot-A 네 번째\nbroken\n1700000500 boot-A \n";
+        java.util.List<String[]> ns = Report.notices(nt, "boot-A", 3);
+        check("1.7.1 알림: 이번 부팅 줄만, 새것부터 최대 3개, 빈 문구·깨진 줄은 건너뜀", ns.size() == 3 && "네 번째".equals(ns.get(0)[1]) && "1700000400".equals(ns.get(0)[0])
+            && "두 번째 안내".equals(ns.get(2)[1]));
+        check("  부팅 id를 모르거나 기록이 없으면 없음", Report.notices(nt, null, 3).isEmpty() && Report.notices(null, "boot-A", 3).isEmpty() && Report.notices(nt, "boot-C", 3).isEmpty());
+        java.util.List<String[]> fresh = Report.notices(nt, "boot-A", 3, 1700000500L, 250);
+        check("  보여 주는 시간이 지난 줄(리뷰 M3)은 뺌", fresh.size() == 2 && "네 번째".equals(fresh.get(0)[1]) && "세 번째".equals(fresh.get(1)[1]));
+        check("  문구 안의 띄어쓰기는 그대로", "지난 부팅 안내".equals(Report.notices(nt, "boot-B", 1).get(0)[1]));
+        check("1.7.1 모드 칸: 새 판 대기 중이면 차의 판과 '대기 중', 아니면 판만, 예전 파일은 '켜짐' 그대로",
+            "켜짐 (2.2.0, 새 판으로 바꾸기 대기 중)".equals(row(Report.parse(GOOD + "modver=2.2.0\nmod_pending=yes\n"), "HMG-API 무선 모드"))
+            && "켜짐 (2.3.0)".equals(row(Report.parse(GOOD + "modver=2.3.0\nmod_pending=no\n"), "HMG-API 무선 모드"))
+            && "켜짐".equals(row(r, "HMG-API 무선 모드")));
+        String mq = java.net.URLDecoder.decode(Report.parse(GOOD + "modver=2.2.0\nmod_pending=yes\n").issueUrl(), "UTF-8");
+        check("  QR 요약 앞쪽에 mod_pending과 차의 판", mq.contains("mod_pending: yes (2.2.0)"));
         System.out.println(fails == 0 ? "Java 모두 통과" : "Java 실패 " + fails + "개");
         System.exit(fails == 0 ? 0 : 1);
     }
