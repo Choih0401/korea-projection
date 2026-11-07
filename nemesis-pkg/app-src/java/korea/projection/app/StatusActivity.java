@@ -32,6 +32,10 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     /** svc/hotspot.sh가 쓰는 설치 진행 기록 (644, 비밀값 없음) */
     static final String PROG = "/data/local/tmp/korea-projection-progress.txt";
     static final String BOOT_ID = "/proc/sys/kernel/random/boot_id";
+    /** 1.7.0: status.sh --collect가 쓰는 제보 자료 저장 진행 기록(644). 토스트 대신 이 화면 맨 위에 보인다 */
+    static final String RPROG = "/data/local/tmp/korea-projection-report-progress.txt";
+    /** 저장이 끝난 기록을 결과 화면에 보여 주는 시간(초): 그보다 오래된 완료 기록은 지난 Launch의 것이다 */
+    static final int SAVE_SHOW = 600;
     /** 설치가 끝난 뒤 status.sh가 상태 파일을 다시 쓰기를 기다리는 최대 시간(초). 넘으면 있는 대로 보인다. */
     static final int AFTER_WAIT = 25;
 
@@ -40,6 +44,10 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     final Handler handler = new Handler();
     String boot;
     boolean watching;
+    /** 1.7.0: 제보 자료 저장(RPROG)을 1초마다 읽는 중 */
+    boolean saving;
+    ProgressBar saveBar;
+    TextView saveText;
     long finishedAt;
     ProgressBar bar;
     TextView pctText, stageText, timeText;
@@ -84,7 +92,7 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     @Override
     protected void onResume() {
         super.onResume();
-        if (watching) {
+        if (watching || saving) {
             handler.removeCallbacks(this);
             handler.postDelayed(this, 1000);
         }
@@ -93,6 +101,7 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     @Override
     protected void onDestroy() {
         watching = false;
+        saving = false;
         handler.removeCallbacks(this);
         super.onDestroy();
     }
@@ -100,7 +109,10 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     /** 1초마다: 진행 기록을 다시 읽어 막대를 고치고, 끝났으면 결과 화면으로 */
     @Override
     public void run() {
-        if (!watching) return;
+        if (!watching) {
+            if (saving) saveTick();
+            return;
+        }
         Report p = Report.parse(read(PROG));
         long now = System.currentTimeMillis() / 1000;
         if (p.progRunning(boot, now)) {
@@ -187,9 +199,55 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         }
     }
 
+    /**
+     * 1.7.0: 제보 자료 저장 진행(RPROG). 진행 중이면 막대와 %, 끝나면 초록 "완료: USB를 빼셔도 됩니다", 실패면 빨강.
+     * 이번 부팅의 기록만 본다. 진행 중 기록이 오래 갱신되지 않으면(STALE) 멈춘 것으로 보고 읽기를 그만둔다.
+     */
+    void saveTick() {
+        Report rp = Report.parse(read(RPROG));
+        long now = System.currentTimeMillis() / 1000;
+        if (saveText == null) { saving = false; return; }
+        String st = rp.get("state");
+        if (rp.progRunning(boot, now)) {
+            int pct = rp.progPct();
+            saveText.setText("제보 자료 저장 중 " + pct + "% · " + rp.get("stage") + " (USB를 빼지 마세요)");
+            saveText.setBackgroundColor(0xFF263238);
+            saveText.setTextColor(Color.WHITE);
+            if (saveBar != null) { saveBar.setVisibility(View.VISIBLE); saveBar.setProgress(pct); }
+            handler.postDelayed(this, 1000);
+            return;
+        }
+        saving = false;
+        if (saveBar != null) saveBar.setVisibility(View.GONE);
+        if ("done".equals(st)) {
+            saveText.setText(rp.get("stage"));
+            saveText.setBackgroundColor(GOOD);
+            saveText.setTextColor(Color.WHITE);
+        } else if ("fail".equals(st)) {
+            saveText.setText(rp.get("stage"));
+            saveText.setBackgroundColor(BAD);
+            saveText.setTextColor(Color.WHITE);
+        } else {
+            saveText.setText("제보 자료 저장 상태를 알 수 없습니다. USB의 KoreaProjection-report 폴더를 확인해 주세요.");
+            saveText.setBackgroundColor(WARN);
+            saveText.setTextColor(Color.BLACK);
+        }
+    }
+
+    /** 이번 부팅에, 최근(SAVE_SHOW초 안) 쓰인 저장 기록이 있는가 */
+    boolean saveRecent(Report rp) {
+        if (!rp.progThisBoot(boot)) return false;
+        try {
+            return System.currentTimeMillis() / 1000 - Long.parseLong(rp.get("t")) <= SAVE_SHOW;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     /** 결과 화면(1.5.4까지의 화면). 설치 결과가 재부팅 필요·실패면 맨 위 판정을 그 문구로 바꾼다. */
     void showStatus() {
         bar = null; pctText = null; stageText = null; timeText = null;
+        saveBar = null; saveText = null; saving = false;
         Report r = Report.parse(read(STATUS));
         Report p = Report.parse(read(PROG));
 
@@ -216,6 +274,21 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         vp.topMargin = dp(6);
         vp.bottomMargin = dp(8);
         left.addView(verdict, vp);
+
+        // 1.7.0: 제보 자료 저장 진행(토스트 대신)
+        Report rp = Report.parse(read(RPROG));
+        if (saveRecent(rp)) {
+            saveText = text("", 17, Color.WHITE);
+            saveText.setPadding(dp(10), dp(6), dp(10), dp(6));
+            left.addView(saveText, new LinearLayout.LayoutParams(-1, -2));
+            saveBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            saveBar.setMax(100);
+            LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(-1, dp(14));
+            sbp.bottomMargin = dp(8);
+            left.addView(saveBar, sbp);
+            saving = true;
+            saveTick();
+        }
 
         LinearLayout table = new LinearLayout(this);
         table.setOrientation(LinearLayout.VERTICAL);

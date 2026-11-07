@@ -4,8 +4,8 @@
   - HMG-API의 "Wireless CarPlay + Android Auto" 2.1.0 모드(VysseCodes, AGPL-3.0)에, 확인된 한국 차의 지원 차 목록과 패치 세트를 더해 빌드한 것입니다.
   - 지금 들어 있는 차: 기아 니로 하이브리드(DEPEHEV.KOR 260902, 패치 세트 depehev), 현대 쏘나타 하이브리드 DN8(DN822HEV.KOR 260902, 패치 세트 dn822hev, 시험 지원), 현대 그랜저 하이브리드 IG(IGPEHEV.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원), 현대 벨로스터 N(JSN.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원), 현대 그랜저 2.5 IG PE(IGPE.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원)
   - 그 밖의 한국 차(Wi-Fi 칩이 있는 차)도 받습니다(자동 시험, 패치 세트 kor). 지도는 HMG-API가 그 차에서 만들고 확인합니다.
-  - 모드 소스는 niro-carplay-build/mod-kor/(비공개 작업 폴더)에 있고, scripts/add-car.py로 서명합니다. 쏘나타 순정 체크섬은 차주 제보(HMG-API #91 Car Report)와 같습니다.
-  - 원본 소스는 https://github.com/VysseCodes/HMG-API 입니다. 니로 변경분은 PR VysseCodes/HMG-API#22 에 있습니다.
+  - 대응 소스(AGPL-3.0): 코드(hooks.jar 등)는 HMG-API v1.0.2 태그의 mods/wireless-carplay-aa/ 그대로이고, 우리가 바꾼 데이터(mod.json, patches.json, patches/)와 다시 만드는 방법은 공개 저장소 https://github.com/StopDragon/korea-projection 의 hmgapi-mod/ 폴더에 있습니다. 쏘나타 순정 체크섬은 차주 제보(HMG-API #91 Car Report)와 같습니다.
+  - 원본 소스는 https://github.com/Open-HMG/HMG-API (예전 주소 VysseCodes/HMG-API) 입니다. 니로 지도 변경분은 PR #22 에 있습니다.
   - Korea Projection 개발 키로 서명했고, HMG-API의 신뢰 작성자 목록에는 없습니다.
   - HMG-API는 같은 키로 서명한 업데이트만 받습니다. 그래서 공식 모드로 바꾸려면 이 모드를 먼저 지워야 합니다. HMG-API 앱에서 지우거나 `hmgapid engine remove wireless-carplay-aa`를 실행한 뒤, 변경 사항을 적용합니다.
 - maps/<제조사>/<차종>/<지역>/<펌웨어>/*.json: 차별 HMG-API 훅 지도

@@ -54,6 +54,12 @@ final class Report {
     static final String MIN_HMGAPI = "1.0.2";
     static final String MIN_NEMESIS = "1.16";
 
+    /**
+     * 1.6.2: 순정이 카플레이 AP를 직접 띄운 차(K3 BDPE 등, 상태 파일 ap_mode=stock). 이때 우리 핫스팟·DHCP가 꺼져 있는
+     * 것이 정상이다(서비스가 일부러 켜지 않는다). 예전 상태 파일(ap_mode 없음)은 false.
+     */
+    boolean stockAp() { return "stock".equals(get("ap_mode")); }
+
     /** 맨 위 한 줄: 무선 카플레이가 될 준비가 됐는지, 아니면 무엇이 빠졌는지 */
     String verdict() {
         if (empty()) return "상태를 읽지 못했습니다. NEMESIS Manager에서 Launch를 다시 눌러 주세요.";
@@ -72,10 +78,17 @@ final class Report {
             return "무선 모드의 'Wireless CarPlay' 설정이 꺼져 있습니다. HMG-API 앱에서 켜고 Apply changes 후 다시 시작해 주세요.";
         if ("off".equals(get("hooks"))) return hooksOffAdvice();
         if (!yes("feat_carplay")) return "무선 카플레이 기능이 꺼져 있습니다. HMG-API 무선 모드를 확인해 주세요.";
-        if (!yes("our_ap") || !yes("our_dhcp")) return "핫스팟이 꺼져 있습니다. 내비를 재부팅(RESET 버튼 또는 NEMESIS 재부팅)한 뒤 다시 확인해 주세요.";
+        // 1.6.2: 순정 카플레이 AP를 쓰는 차인데 지금 순정 Wi-Fi가 꺼져 있음(서비스는 우리 핫스팟을 켜지 않고 기다린다)
+        if (!stockAp() && yes("stock_seen") && !yes("our_ap"))
+            return "내비 Wi-Fi(무선 카플레이용)가 지금 꺼져 있습니다. 아이폰을 연결해 보고, 안 되면 내비를 재부팅해 주세요.";
+        // 1.7.0: Wi-Fi 칩은 있는데 드라이버가 올라오지 않아 wlan0가 없다(그랜저 IG #52·#53). 재부팅으로 풀리는지 보고, 아니면 제보
+        if (!stockAp() && yes("nowlan") && !yes("our_ap"))
+            return "Wi-Fi 장치가 켜지지 않아 핫스팟을 켜지 못했습니다. 내비를 재부팅해 보시고, 그래도 같으면 USB를 꽂고 Launch로 리포트를 보내 주세요.";
+        if (!stockAp() && (!yes("our_ap") || !yes("our_dhcp"))) return "핫스팟이 꺼져 있습니다. 내비를 재부팅(RESET 버튼 또는 NEMESIS 재부팅)한 뒤 다시 확인해 주세요.";
         if (older(get("nemesis"), MIN_NEMESIS) != 0)
             return "NEMESIS를 " + MIN_NEMESIS + " 이상으로 업데이트해 주세요.";
         if (!"0".equals(get("cp_conn")) && !get("cp_conn").isEmpty()) return "무선 카플레이 연결됨";
+        if (stockAp()) return "무선 카플레이 준비됨(내비 Wi-Fi 사용). 아이폰을 연결해 보세요.";
         return "무선 카플레이 준비됨. 아이폰을 연결해 보세요.";
     }
 
@@ -90,7 +103,7 @@ final class Report {
         if ("no".equals(get("mod")) || "no".equals(get("mod_on")) || "off".equals(get("bridge"))) return 2;
         // 훅 기록은 지난 부팅 것일 수 있어 노랑
         if ("off".equals(get("hooks"))) return 1;
-        if (!yes("our_ap") || !yes("our_dhcp")) return 1;
+        if (!stockAp() && (!yes("our_ap") || !yes("our_dhcp"))) return 1;
         if (older(get("nemesis"), MIN_NEMESIS) != 0) return 1;
         return 0;
     }
@@ -255,9 +268,14 @@ final class Report {
         out.add(new String[] { "HMG-API 훅", "on".equals(h) ? "켜짐" : "off".equals(h) ? "꺼짐 (" + (get("hookmap").isEmpty() ? "?" : get("hookmap")) + ", 마지막 부팅 기록)" : "-" });
         out.add(new String[] { "NEMESIS", ver(get("nemesis"), MIN_NEMESIS) });
         out.add(new String[] { "무선 카플레이 기능", yn("feat_carplay") });
-        out.add(new String[] { "무선 안드로이드 오토 기능", yn("feat_aa") });
+        // 1.7.0: 우리 무선 AA 설정(aa=yes 기본, no면 USB kp-aa-off로 끔). 줄 수는 그대로 둔다
+        String aa = get("aa");
+        out.add(new String[] { "무선 안드로이드 오토 기능", yn("feat_aa") + ("yes".equals(aa) ? " · 켜짐" : "no".equals(aa) ? " · 꺼짐(kp-aa-off)" : "") });
         out.add(new String[] { "Wi-Fi 장치", yn("wlan0") });
-        out.add(new String[] { "핫스팟 (hostapd)", yn("our_ap") });
+        String am = get("ap_mode");
+        if (!am.isEmpty())
+            out.add(new String[] { "무선 카플레이 Wi-Fi", "stock".equals(am) ? "내비 순정 Wi-Fi" : "ours".equals(am) ? "Korea Projection 핫스팟" : "없음" });
+        out.add(new String[] { "핫스팟 (hostapd)", yn("our_ap") + (stockAp() ? " (순정 Wi-Fi를 쓰므로 꺼 둠)" : "") });
         out.add(new String[] { "IP 나눠 주기 (DHCP)", yn("our_dhcp") });
         out.add(new String[] { "순정 핫스팟", yn("other_ap") });
         out.add(new String[] { "카플레이 연결", get("cp_conn") + "개" });
@@ -279,8 +297,8 @@ final class Report {
      */
     String issueUrl() {
         // 중요한 것부터: 링크가 길면 뒤에서부터 뺀다 (product는 제목·항목에 따로 들어간다)
-        String[] keys = { "support", "platform", "targetdir", "pkgver", "tested", "feat_carplay", "our_ap", "our_dhcp", "other_ap",
-            "cp_conn", "wlan0", "softap_strings", "ssid_len", "pass_len", "wp", "mod", "mod_on", "bridge", "hooks", "hookmap", "feat_aa", "feat_wifi",
+        String[] keys = { "support", "state", "platform", "targetdir", "pkgver", "tested", "feat_carplay", "ap_mode", "our_ap", "our_dhcp", "other_ap", "stock_ssid", "stock_seen",
+            "cp_conn", "aa", "nowlan", "wlan0", "softap_strings", "ssid_len", "pass_len", "wp", "mod", "mod_on", "bridge", "hooks", "hookmap", "feat_aa", "feat_wifi",
             "wpa", "hmgapi", "nemesis", "made" };
         List<String> lines = new ArrayList<String>();
         lines.add("(QR summary)");

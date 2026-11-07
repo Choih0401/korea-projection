@@ -10,8 +10,8 @@
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
 APP=${APP:-/data/nemesis/apps/korea.projection}
 # busybox 고르기(1.6.0). 내비에 busybox(1.8.1)가 있으면 지금처럼 그것을 쓴다(니로 등 확인된 차는 바뀌지 않음).
-# 1.5.6은 bin/busybox를 함께 넣지 않는다(1.6.x에서 다시 넣는다): 없는 내비는 아래에서 BB_OK=0이 되어 1.5.5처럼 대기한다.
 # 없는 내비(K3 BDPE·K8 GL3HEV, tcc803x, #15·#19)는 패키지에 함께 넣은 busybox(1.36.1, bin/busybox)를 쓴다.
+# (1.5.6은 bin/busybox를 뺐고, 1.6.2 알파에서 다시 넣었다.)
 # BB를 미리 정해 두면(테스트, 예전 호출) 그대로 쓴다. 쓸 수 있는지는 한 번 실행해 보고 BB_OK에 남긴다.
 BB_SYS=${BB_SYS:-/system/bin/busybox}
 BB_OWN=${BB_OWN:-$APP/bin/busybox}
@@ -37,9 +37,21 @@ SRC=${SRC:-/data/misc/wifi/softap.conf}
 CONF=${CONF:-/data/misc/wifi/hostapd-kp.conf}
 W=${W:-/data/local/tmp/korea.projection}
 AP_IP=192.168.43.1
+# 1.7.0 무선 안드로이드 오토: 우리 hostapd가 도는 동안 시스템 속성 AAPROP=1을 건다(기본 켜짐, 2026-11-08 소유자 결정:
+# 니로에서 첫·두 번째 연결과 카플레이 복귀를 확인함). HMG-API 모드(2.2.0, AaWifi)가 이 값이 1일 때만 GPM·PhoneProjection
+# 안에서 "AP 켜짐, 모드 2"로 답한다. 속성은 재부팅하면 사라진다.
+# 끄기: 설치·Launch 때 USB 맨 위의 kp-aa-off → $BK/aa-off(업데이트해도 남고 삭제하면 지워짐). 다시 켜기: kp-aa-on.
+AAOFF=${AAOFF:-${BK:-/data/nemesis/backup/korea.projection}/aa-off}
+AAPROP=sys.kp.aa_ap
 # busybox ps cuts command lines near 80 columns: match the start of dnsmasq's (netd starts it the
 # same way, but the stock hotspot never runs on this car)
 DNSMASQ='dnsmasq --keep-in-foreground --no-resolv --no-poll'
+# 1.6.2: 순정 dnsmasq(netd)도 명령 앞부분이 같아서 위 패턴으로는 우리 것을 가릴 수 없다(K3 #15: 순정 AP의 dnsmasq를
+# 우리 DHCP로 셈). 그래서 우리 dnsmasq는 띄울 때 "<pid> <부팅 id>"를 이 파일에 남기고, 그 pid로만 보고 멈춘다.
+DNSPID=${DNSPID:-$W/dnsmasq.pid}
+PROC=${PROC:-/proc}
+# 순정 카플레이 AP를 기다리는 시간(초). 함께 넣은 busybox를 쓰는 내비(tcc803x)에서만 쓴다(아래 main).
+STOCK_GRACE=${STOCK_GRACE:-90}
 # 이 패키지가 동작하는 차. 목록에 없는 차(해외 차)는 로그만 남기고 대기한다.
 # - CARS_OK: 차에서 동작을 확인한 차 (니로 하이브리드)
 # - CARS_TRY: 제보(Car Report, 순정 체크섬)로 지도를 만들어 패키지에 넣었고, 차에서는 아직 확인하지 않은 차
@@ -155,34 +167,157 @@ running() { $PS | $BB grep -v grep | $BB grep -v " Z " | $BB grep -q "$1"; }
 # 우리 것이 아닌 hostapd(순정 핫스팟)가 살아 있는가: 우리 것은 설정 파일 경로($CONF)로 가린다
 stock_ap_on() { $PS | $BB grep -v grep | $BB grep -v " Z " | $BB grep -v "$CONF" | $BB grep -q hostapd; }
 
+# --- 1.6.2: 순정 hostapd가 띄운 Wi-Fi가 카플레이용인가 ---
+# softap.conf에는 SSID가 둘 있다: S1 일반 핫스팟, S2 카플레이용(ConnectivitySSID). 순정 hostapd 설정의 ssid=가
+# S2와 같으면 순정이 카플레이 AP를 직접 띄운 것이다(K3 BDPE: 모드 적용·재부팅 뒤, #15). S1과 같으면 일반 핫스팟
+# (벨로스터 N 등, 지금처럼 비켜 준다). 값은 비교만 하고 어디에도 남기지 않는다.
+# 설정 파일 경로는 ps가 아니라 /proc/<pid>/cmdline에서 읽는다(netd의 "hostapd -e <entropy> <conf>"는 ps가 80칸에서 자른다).
+# 순정 것으로 보는 hostapd는 부모가 netd인 것뿐이다: 우리 USB 스크립트(cp-ap.sh·cp-drive.sh, hostapd-cp.conf)나
+# 다른 패키지가 같은 카플레이 SSID로 띄운 hostapd를 순정으로 보지 않게(리뷰 H2).
+# $1(pid)의 부모가 netd인가. /proc/<pid>/stat의 4번째 칸이 부모 pid다(이름 칸에 공백이 없는 프로그램만 본다).
+by_netd() {
+  [ -r $PROC/$1/stat ] || return 1
+  read _n1 _n2 _n3 _pp _nr < $PROC/$1/stat
+  case "$_pp" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r $PROC/$_pp/stat ] || return 1
+  read _n1 _n2 _nr < $PROC/$_pp/stat
+  [ "$_n2" = "(netd)" ]
+}
+# 우리 것이 아닌 hostapd의 pid들
+other_hostapd_pids() { $PS | $BB grep -v grep | $BB grep -v " Z " | $BB grep -v "$CONF" | $BB grep hostapd | $BB awk '{print $1}'; }
+# 순정(netd가 띄운) hostapd의 설정 파일(마지막 .conf 인자). 못 찾으면 1.
+stock_conf() {
+  for _hp in $(other_hostapd_pids); do
+    [ -r $PROC/$_hp/cmdline ] && by_netd $_hp || continue
+    _sc=
+    for _a in $($BB tr '\0' ' ' < $PROC/$_hp/cmdline 2>/dev/null); do case "$_a" in *.conf) _sc=$_a ;; esac; done
+    case "$_sc" in *hostapd-cp.conf) continue ;; esac
+    [ -n "$_sc" ] && [ -r "$_sc" ] && { echo "$_sc"; return 0; }
+  done
+  return 1
+}
+# 출력: none(우리 것이 아닌 hostapd 없음) | carplay | hotspot | other | unknown(netd가 띄운 것이 아님, 설정을 못 읽음,
+# ssid 줄이 없거나 여럿, ssid2= 16진 형식, softap.conf를 못 읽음, 두 SSID가 같음). parse_conf가 먼저 돌아 S1·S2·NS가 있어야 한다.
+stock_ssid() {
+  stock_ap_on || { echo none; return 0; }
+  _sf=$(stock_conf) || { echo unknown; return 0; }
+  _ss=; _sn=0
+  while IFS= read -r _l || [ -n "$_l" ]; do
+    case "$_l" in ssid=*) _ss=${_l#ssid=}; _sn=$((_sn+1)) ;; esac
+  done < "$_sf"
+  if [ $_sn -ne 1 ] || [ -z "$_ss" ] || [ "${NS:-0}" -lt 4 ] || [ ${#S2} -lt 1 ] || [ "$S1" = "$S2" ]; then echo unknown
+  elif [ "$_ss" = "$S2" ]; then echo carplay
+  elif [ "$_ss" = "$S1" ]; then echo hotspot
+  else echo other; fi
+  return 0
+}
+# 우리 dnsmasq가 살아 있는가: DNSPID의 pid가 이번 부팅의 것이고 이름이 dnsmasq일 때만(/data/local/tmp는 재부팅 뒤에도
+# 남아 예전 pid가 순정 dnsmasq를 가리킬 수 있다)
+our_dhcp_on() {
+  [ -f $DNSPID ] || return 1
+  read _dp _db < $DNSPID
+  case "$_dp" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$_db" = "$(cat $BOOT_ID 2>/dev/null)" ] && [ -r $PROC/$_dp/stat ] || return 1
+  read _dx _dc _dr < $PROC/$_dp/stat
+  [ "$_dc" = "(dnsmasq)" ]
+}
+
+# 1.7.0: Wi-Fi 장치(wlan0)가 없어 hostapd가 바로 꺼지는 차(그랜저 IG #52·#53, 칩은 있음: 드라이버가 올라오지 않음).
+# 이번 부팅에 처음 볼 때만 한 번 남기고, 그때의 순정 Wi-Fi 기록(WifiHW·WifiStateMachine 등 logcat, 드라이버 상태)을
+# $NOWLAN_LOG에 남긴다(리포트 3-log.txt에 들어감, 가림). 그 뒤로는 34초마다 "hostapd 시작·꺼짐"을 다시 쓰지 않는다.
+# 상태 파일 nowlan=yes로 상태 화면이 "Wi-Fi 드라이버가 올라오지 않음"을 보인다. 끝나는 조건: wlan0가 생기면 지움.
+NOWLAN=${NOWLAN:-$W/nowlan}
+NOWLAN_LOG=${NOWLAN_LOG:-$W/nowlan-wifi.txt}
+WLTAGS=' [VDIWEF]/(WifiHW|WifiStateMachine|WifiController|WifiService|WifiNative[^ (]*|SoftapController|wpa_supplicant|NetworkManagementService|CommandListener|bcmdhd|dhd) *\('
+nowlan_now() { [ -s $NOWLAN ] && [ "$(cat $NOWLAN 2>/dev/null)" = "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" ]; }
+wlan_fail() {
+  nowlan_now && return 0
+  cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} > $NOWLAN 2>/dev/null
+  log "Wi-Fi 장치(wlan0)가 없음: Wi-Fi 드라이버가 올라오지 않아 핫스팟을 켜지 못함(Wi-Fi 설정 $(settings get global wifi_on 2>/dev/null), 드라이버 상태 $(getprop wlan.driver.status 2>/dev/null)). 계속 다시 시도함"
+  {
+    echo "# wlan0 없음 기록 $(date '+%m-%d %H:%M:%S') (부팅 뒤 $($BB awk '{ print int($1) }' /proc/uptime 2>/dev/null)초)"
+    echo "wifi_on=$(settings get global wifi_on 2>/dev/null) wlan.driver.status=$(getprop wlan.driver.status 2>/dev/null) init.svc.wpa_supplicant=$(getprop init.svc.wpa_supplicant 2>/dev/null)"
+    echo "wpa_supplicant.conf: $($BB ls -ln /data/misc/wifi/wpa_supplicant.conf 2>/dev/null | $BB awk '{ print $1, $3 ":" $4 }')"
+    echo "net: $($BB ls /sys/class/net 2>/dev/null | $BB awk '{ printf "%s ", $0 }')"
+    echo "## logcat (순정 Wi-Fi, 마지막 200줄)"
+    if echo x | $BB awk "$KPMASK" >/dev/null 2>&1; then
+      logcat -d -v time 2>/dev/null | $BB grep -E "$WLTAGS" | $BB awk -v n=200 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' | $BB awk "$KPMASK"
+    fi
+    echo "## 커널 (Wi-Fi 드라이버, 마지막 60줄)"
+    dmesg 2>/dev/null | $BB grep -i -E "dhd|bcmdhd|wlan|sdio|mmc" | $BB awk -v n=60 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' \
+      | $BB awk "$KPMASK"
+  } > $NOWLAN_LOG 2>/dev/null
+  return 0
+}
 up() {
   $BB ifconfig wlan0 $AP_IP netmask 255.255.255.0 up 2>/dev/null
   if ! running "hostapd $CONF"; then
     hostapd $CONF >/dev/null 2>&1 &
     sleep 4
     $BB ifconfig wlan0 $AP_IP netmask 255.255.255.0 up 2>/dev/null
-    log "hostapd 시작"
-    # 1.5.6: 5GHz를 받지 않는 차라면 hostapd가 바로 끝난다. 2.4GHz로 되돌리지는 않고(소유자 결정) 기록만 남긴다.
-    running "hostapd $CONF" || log "hostapd가 4초 안에 꺼짐(5GHz $($BB awk -F= '$1 == "channel" { print $2 }' $CONF 2>/dev/null)번을 못 띄웠을 수 있음)"
+    # wlan0가 없다고 이미 남긴 부팅에는 34초마다 같은 줄을 쓰지 않는다
+    nowlan_now || log "hostapd 시작"
+    if ! running "hostapd $CONF"; then
+      if [ ! -d $WLAN ]; then
+        wlan_fail
+      else
+        # 1.5.6: 5GHz를 받지 않는 차라면 hostapd가 바로 끝난다. 2.4GHz로 되돌리지는 않고(소유자 결정) 기록만 남긴다.
+        log "hostapd가 4초 안에 꺼짐(5GHz $($BB awk -F= '$1 == "channel" { print $2 }' $CONF 2>/dev/null)번을 못 띄웠을 수 있음)"
+      fi
+    elif [ -f $NOWLAN ]; then
+      rm -f $NOWLAN; log "Wi-Fi 장치(wlan0)가 생겨 hostapd가 켜짐"
+    fi
   fi
-  if ! running "$DNSMASQ"; then
+  if ! our_dhcp_on; then
     # same style as netd: bare --pid-file (no /var/run here)
     dnsmasq --keep-in-foreground --no-resolv --no-poll --dhcp-authoritative --pid-file \
       --interface=wlan0 --bind-interfaces \
       --dhcp-range=192.168.43.10,192.168.43.50,255.255.255.0,1h --dhcp-option=3 --dhcp-option=6 >/dev/null 2>&1 &
-    log "dnsmasq 시작"
+    echo "$! $(cat $BOOT_ID 2>/dev/null)" > $DNSPID
+    # 바로 꺼지는 dnsmasq(포트를 못 잡음 등)를 30초마다 다시 띄워도 기록은 이번 실행에 3번까지만(리뷰 L1)
+    DN_STARTS=$((${DN_STARTS:-0}+1))
+    if [ $DN_STARTS -le 3 ]; then log "dnsmasq 시작"
+    elif [ $DN_STARTS = 4 ]; then log "dnsmasq가 자꾸 꺼짐: 이번 실행에서는 시작 기록을 더 남기지 않음"; fi
   fi
 }
 
-# only our own hostapd and dnsmasq (matched by their command lines)
+# 우리 hostapd(설정 파일 경로로 가림)와 우리 dnsmasq(DNSPID)만 멈춘다. 순정 dnsmasq는 건드리지 않는다(1.6.2).
+# 예전 판(1.6.1까지)이 pid 없이 띄운 우리 dnsmasq는, pid 파일이 없고 다른 hostapd가 없고 순정 AP 경로가 아닐 때만
+# 예전처럼 명령으로 찾는다. 그때도 부모가 netd인 dnsmasq(순정)는 멈추지 않는다(리뷰 M1).
 stop_ours() {
-  for p in $($PS | $BB grep -v grep | $BB grep -E "hostapd $CONF|$DNSMASQ" | $BB awk '{print $1}'); do
+  for p in $($PS | $BB grep -v grep | $BB grep "hostapd $CONF" | $BB awk '{print $1}'); do
     kill $p 2>/dev/null
   done
+  if our_dhcp_on; then
+    kill $_dp 2>/dev/null
+  elif [ ! -f $DNSPID ] && [ "${STOCK_MODE:-0}" != 1 ] && ! stock_ap_on; then
+    for p in $($PS | $BB grep -v grep | $BB grep "$DNSMASQ" | $BB awk '{print $1}'); do
+      by_netd $p || kill $p 2>/dev/null
+    done
+  fi
+  rm -f $DNSPID
+  return 0
 }
 stop_ap() {
+  aa_sig 0
   stop_ours
   killlog
+}
+# AA 신호를 맞춘다. 인자가 있으면 그 값(0)으로, 없으면 켜기 파일·우리 hostapd로 정한다. 바뀔 때만 setprop·로그.
+# 값만 쓰고 SSID·비밀번호는 쓰지 않는다. 순정 AP 경로(tcc803x)는 이 함수를 부르지 않는다(순정이 이미 AP를 안다).
+aa_sig() {
+  _a=${1:-}
+  if [ -z "$_a" ]; then
+    _a=0; [ ! -f $AAOFF ] && running "hostapd $CONF" && _a=1
+    # tcc803x(함께 넣은 busybox)·순정 카플레이 AP를 본 차는 순정이 AP를 켜고 끈다: 훅이 그 요청을 막지 않게 켜지 않는다(리뷰 L1)
+    { [ "$BB" = "$BB_OWN" ] || [ -f $BK/stockap.seen ]; } && _a=0
+  fi
+  [ "$_a" = "$(getprop $AAPROP 2>/dev/null)" ] && return 0
+  # 처음(속성 없음)에 0이면 조용히 둔다
+  [ "$_a" = 0 ] && [ -z "$(getprop $AAPROP 2>/dev/null)" ] && return 0
+  setprop $AAPROP $_a 2>/dev/null
+  if [ $_a = 1 ]; then log "무선 안드로이드 오토(시험) 켜짐: 모드에 우리 AP를 알림"; else log "무선 안드로이드 오토(시험) 신호 끔"; fi
+  return 0
 }
 
 # 확인된 차가 아니면, 다른 hostapd(순정 핫스팟 등)가 돌 때 우리 핫스팟을 멈추고 비켜 준다(wlan0을 다투지 않게).
@@ -190,6 +325,14 @@ stop_ap() {
 # 모드가 적용되면 순정 핫스팟 메뉴가 꺼지므로(featurexml) 보통은 일어나지 않지만, 적용 직후 재부팅 전에는 있을 수 있다.
 ap_yield() {
   if ! car_in "$prod" "$CARS_OK" && stock_ap_on; then
+    # 1.7.0: 다른 hostapd가 도는 동안은 우리 AP가 아니므로 AA 신호를 끈다(리뷰 M1, 바뀔 때만 setprop)
+    aa_sig 0
+    # 1.6.2: 순정이 카플레이 AP를 띄웠으면 우리 것을 멈추고 순정 AP 경로로 간다(돌아오지 않음)
+    if [ "$(stock_ssid)" = carplay ]; then
+      stop_ap; rm -f $W/ap.yield
+      log "우리 핫스팟을 켠 뒤 순정 카플레이 AP가 켜짐: 우리 핫스팟을 멈춤(Wi-Fi 잠금은 삭제할 때 되돌림)"
+      stock_ap_mode
+    fi
     if [ ! -f $W/ap.yield ]; then
       : > $W/ap.yield; stop_ours
       log "다른 hostapd가 돌고 있음(순정 핫스팟 등): 우리 핫스팟을 멈추고 기다림"
@@ -200,6 +343,71 @@ ap_yield() {
     rm -f $W/ap.yield; log "다른 hostapd가 멈춤: 우리 핫스팟을 다시 켬"
   fi
   return 1
+}
+
+# 1.6.2: 순정 카플레이 AP로 준비됨. 순정이 카플레이 AP를 직접 띄우는 차(K3 BDPE, 1.6.1 알파에서 세션 확인 #15)에서는
+# 우리 hostapd·dnsmasq·Wi-Fi 잠금·svc wifi를 하나도 하지 않는다(wlan0을 다투지 않게).
+# 이 차에서 한 번 보면 $BK/stockap.seen을 남긴다: 다음 부팅에 순정 AP가 우리보다 늦게 떠도 우리 AP를 켜지 않는다.
+# 기록이 낡지 않게, 순정 카플레이 AP를 한 번도 못 본 부팅이 STOCK_MISS_MAX번 이어지면 다음 부팅에 기록을 지우고
+# 보통 흐름으로 돌아간다($BK/stockap.miss "<횟수> <부팅 id>", 리뷰 H2). 패키지를 지우면 $BK와 함께 지워진다.
+# 순정 AP가 사라지면 우리 AP로 바꾸지 않고 순정이 다시 켤 때까지 기다린다(순정이 언제 켜고 끄는지 모르고, 바꾸면
+# wlan0을 다툰다). 60초마다 ps만 보고 바뀔 때만 로그를 남긴다. 끝나는 조건: TERM(서비스 멈춤·패키지 삭제).
+# mode=restart라 끝내지 않는다(끝내면 다시 시작되고 5번 죽으면 꺼진다). 돌아오지 않는다.
+STOCK_MISS_MAX=${STOCK_MISS_MAX:-3}
+stock_ap_ready() {
+  if setup_done && ! prog_final_this_boot; then
+    prog 100 done "무선 카플레이 준비됨(내비 Wi-Fi 사용). 아이폰을 연결해 보세요."
+  fi
+  return 0
+}
+# 이번 부팅에 순정 카플레이 AP를 봄(0으로) / 못 봄(이번 부팅에서 한 번만 하나 올림)
+stock_seen_now() { echo "0 $(cat $BOOT_ID 2>/dev/null)" > $BK/stockap.miss; }
+stock_miss_boot() {
+  _mc=0; _mb=
+  [ -f $BK/stockap.miss ] && read _mc _mb < $BK/stockap.miss
+  case "$_mc" in ''|*[!0-9]*) _mc=0 ;; esac
+  [ "$_mb" = "$(cat $BOOT_ID 2>/dev/null)" ] || echo "$((_mc+1)) $(cat $BOOT_ID 2>/dev/null)" > $BK/stockap.miss
+}
+# 순정 AP 기록이 낡았는가(못 본 부팅이 STOCK_MISS_MAX번 이상, 이번 부팅은 세지 않음)
+stock_seen_stale() {
+  _mc=0; _mb=
+  [ -f $BK/stockap.miss ] && read _mc _mb < $BK/stockap.miss
+  case "$_mc" in ''|*[!0-9]*) _mc=0 ;; esac
+  [ $_mc -ge $STOCK_MISS_MAX ]
+}
+stock_ap_mode() {
+  STOCK_MODE=1
+  $BB mkdir -p $BK; : > $BK/stockap.seen
+  _k=$(stock_ssid)
+  if [ "$_k" = carplay ]; then
+    _on=1; stock_seen_now
+    log "순정 카플레이 AP 사용: 우리 핫스팟을 켜지 않음 (카플레이 SSID 길이 ${#S2} 일치)"
+    stock_ap_ready
+  else
+    _on=0; stock_miss_boot
+    log "순정 카플레이 AP를 기다림: 이 차는 순정이 카플레이 AP를 켬(기록 stockap.seen, 지금 판정 $_k), 우리 핫스팟을 켜지 않음"
+  fi
+  # 디버그 로그(차주가 USB 파일로 켰을 때만)는 순정 AP 차에서도 남긴다(리뷰 L2)
+  logstart
+  rm -f $CPN
+  wifi_events; cp_watch
+  while true; do
+    sleep 60 &
+    wait $!
+    logrotate
+    _k=$(stock_ssid)
+    if [ "$_k" = carplay ]; then
+      if [ $_on = 0 ]; then
+        _on=1; stock_seen_now
+        log "순정 카플레이 AP가 켜짐"
+        stock_ap_ready
+      fi
+    elif [ $_on = 1 ]; then
+      _on=0
+      log "순정 카플레이 AP가 꺼짐: 순정이 다시 켤 때까지 기다림(우리 핫스팟은 켜지 않음, 지금 판정 $_k)"
+    fi
+    wifi_events; cp_watch
+  done
 }
 
 # --- Wi-Fi 잠금 (1.5.5) ---
@@ -326,8 +534,33 @@ wifi_events() {
   return 0
 }
 # 카플레이 연결 수(ESTABLISHED)가 바뀌면 남긴다
+# 지금 무선 카플레이 연결 수: 로컬 포트 7000(DiPO, 16진 1B58)의 ESTABLISHED(01) 연결 중 로컬 주소가 wlan0의 주소인 것.
+# 1.7.0: 예전에는 netstat에서 우리 AP 주소 $AP_IP:7000만 세서 순정 AP 차(K3, 주소가 다름)에서 늘 0이었다.
+# netstat은 긴 IPv6 주소를 자를 수 있어(리뷰 M1) /proc/net/tcp·tcp6을 직접 읽는다. 주소는 32비트 단위로 바이트가 뒤집혀
+# 있다(리틀 엔디언). wlan0의 IPv6는 /proc/net/if_inet6(네트워크 순서), IPv4는 ifconfig wlan0의 inet addr로 맞춘다.
+# 유선 카플레이(USB 네트워크 ncm0)는 wlan0 주소가 아니라 세지 않는다(리뷰 M2). IPv4가 IPv6 꼴(::ffff:)이어도 맞춘다.
+PROCNET=${PROCNET:-/proc/net}
+cp_count() {
+  _v4=$($BB ifconfig wlan0 2>/dev/null | $BB awk '/inet addr:/ { a = $0; sub(/.*inet addr:/, "", a); sub(/ .*/, "", a); print a; exit }')
+  # 있는 파일만 넘긴다(IPv6가 꺼진 커널에는 if_inet6·tcp6이 없다. 하나도 없으면 awk가 표준입력을 기다리므로 0)
+  _pf=; for _x in if_inet6 tcp tcp6; do [ -r $PROCNET/$_x ] && _pf="$_pf $PROCNET/$_x"; done
+  [ -n "$_pf" ] || { echo 0; return 0; }
+  $BB awk -v v4="$_v4" '
+    function le(w) { return substr(w, 7, 2) substr(w, 5, 2) substr(w, 3, 2) substr(w, 1, 2) }
+    BEGIN { h4 = ""; if (split(v4, o, ".") == 4) h4 = sprintf("%02X%02X%02X%02X", o[1], o[2], o[3], o[4]) }
+    FILENAME ~ /if_inet6$/ { if ($6 == "wlan0") ok6[toupper($1)] = 1; next }
+    $4 == "01" && split($2, p, ":") == 2 && p[2] == "1B58" {
+      a = toupper(p[1])
+      if (length(a) == 8) { if (h4 != "" && le(a) == h4) n++; next }
+      if (length(a) != 32) next
+      f = le(substr(a, 1, 8)) le(substr(a, 9, 8)) le(substr(a, 17, 8)) le(substr(a, 25, 8))
+      if (f in ok6) n++
+      else if (h4 != "" && substr(f, 1, 24) == "00000000000000000000FFFF" && substr(f, 25, 8) == h4) n++
+    }
+    END { print n + 0 }' $_pf 2>/dev/null || echo 0
+}
 cp_watch() {
-  _n=$($BB netstat -tn 2>/dev/null | $BB grep "$AP_IP:7000 " | $BB grep -c ESTABLISHED)
+  _n=$(cp_count)
   _o=$(cat $CPN 2>/dev/null)
   if [ "${_n:-0}" != "${_o:-0}" ]; then log "카플레이 연결 ${_o:-0} → ${_n:-0}"; echo "${_n:-0}" > $CPN; fi
   return 0
@@ -411,8 +644,120 @@ killlog() {
 # 같은 줄이 연달아 나오면(pcm_write failed가 1초에 수천 줄) uniq -c가 한 줄과 횟수로 줄인다
 # (앞의 날짜·시간 두 칸은 비교하지 않는다). 그래서 각 줄 앞에 반복 횟수가 붙는다.
 # 1.5.6: 안드로이드 오토 쪽(GPM·GalReceiver로 시작하는 태그)도 남긴다(로드맵 1.5.6 2번, 1.5.7의 근거 자료)
-TAGS=' [VDIWEF]/(hostapd|dnsmasq|HMG-API|iAP2|Iap2Service|CarPlay_|TccCarPlay|WifiService|BTCMService|NavigationCluster|ClusterService|GPM[A-Za-z_]*|GalReceiver[A-Za-z_]*) *\('
+# 1.7.0: 폰 프로젝션 전체(안드로이드 오토 AAProjection, 무선 폰 프로젝션 PhoneProjection, 블루투스 RFCOMM·SPP, Wi-Fi P2P).
+# 예전 GPM*·GalReceiver*는 실제 태그가 아니라 아무것도 잡지 못했다(니로 logcat: AA 태그는 AAProjection).
+TAGS=' [VDIWEF]/(hostapd|dnsmasq|HMG-API|iAP2|Iap2Service|CarPlay_|TccCarPlay|WifiService|BTCMService|NavigationCluster|ClusterService|AAProjection|PhoneProjection|WifiP2pService|BluetoothSocket|BluetoothServerSocket|bt-rfcomm|HfDeviceBTCMSppApi) *\('
 DROP='iAPSendMessage\(\) : done with \(0x00\)|iAPSendMessage Command Received|getCANSTatus = true|\): getCANStatus$|updateTPCrossroadName'
+# --- 1.7.0 로그 가리기(KPMASK): 리포트의 폰 프로젝션 기록과 디버그 로그(cp.log)에 쓴다 ---
+# AA 진단 USB(usb-aadiag/NEMESIS.sh MASK, 니로 busybox 1.8.1 awk에서 2026-11-08 동작 확인)를 옮기고, 한 낱말 폰 이름 규칙(nmk)을 더했다.
+#  - Wi-Fi 이름·비밀번호 낱말이 나오면 그 뒤를 지운다("BSSID" 낱말은 남김: "Failed to find host IP/BSSID"가 원인 자료)
+#  - 이름(name=, Name :, Device:, DIRECT- 등)·괄호 안 이름(brk, nmk)을 가린다(#47 사고: PhoneProjection 줄의 폰 이름)
+#  - MAC, IP(192.168.43.1·0.0.0.0·127.0.0.1은 남김), IPv6, VIN 꼴, 휴대전화 번호
+KPMASK='
+function keepip(s) { return s == "192.168.43.1" || s == "0.0.0.0" || s == "127.0.0.1" }
+function keepmac(s) { s = tolower(s); return s ~ /^[0:]+$/ || s ~ /^[f:]+$/ }
+function ips(l,   o, m) {
+  o = ""
+  while (match(l, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+    m = substr(l, RSTART, RLENGTH)
+    o = o substr(l, 1, RSTART - 1) (keepip(m) ? m : "x.x.x.x")
+    l = substr(l, RSTART + RLENGTH)
+  }
+  return o l
+}
+function macs(l,   o, m) {
+  o = ""
+  while (match(l, H ":" H ":" H ":" H ":" H ":" H)) {
+    m = substr(l, RSTART, RLENGTH)
+    o = o substr(l, 1, RSTART - 1) (keepmac(m) ? m : "xx:xx:xx:xx:xx:xx")
+    l = substr(l, RSTART + RLENGTH)
+  }
+  return o l
+}
+# logcat 줄의 괄호·대괄호 안이 이름처럼 보이면 가린다: 한글 등 ASCII가 아닌 글자가 있거나, 띄어쓰기와 영문자가 함께 있을 때.
+# K7(YGPE) 제보(2026-11-07)에서 PhoneProjection이 "addDeviceStatusInfo (<폰 이름>)", "[<폰 이름>]" 꼴로 이름을 남겼다.
+# "[ b ]", "( 1610)"(pid), "[WPA2-PSK-CCMP]"처럼 띄어쓰기가 없는 한 낱말은 남는다.
+function brk(l,   o, m, c, n) {
+  o = ""
+  while (match(l, /[[(][^][()]*[])]/)) {
+    m = substr(l, RSTART, RLENGTH); n = RLENGTH
+    c = substr(m, 2, n - 2); gsub(/^ +/, "", c); gsub(/ +$/, "", c)
+    if (c ~ /[^ -~]/ || (c ~ / / && c ~ /[A-Za-z]/)) m = substr(m, 1, 1) "가림: 이름" substr(m, n, 1)
+    o = o substr(l, 1, RSTART - 1) m
+    l = substr(l, RSTART + n)
+  }
+  return o l
+}
+# 1.7.0: 좌표 꼴(정수부 1~3자리, 소수점 아래 4자리 이상, 앞에 숫자·점·영문자가 없음)만 가린다(리뷰 L1: V039.001.260902 같은
+# 펌웨어 문자열은 앞에 점이 있어 남는다)
+function crd(l,   o, m, p) {
+  o = ""
+  while (match(l, /-?[0-9][0-9]?[0-9]?\.[0-9][0-9][0-9][0-9][0-9]*/)) {
+    m = substr(l, RSTART, RLENGTH); p = RSTART > 1 ? substr(l, RSTART - 1, 1) : ""
+    # 커널 시각([   12.345678])은 좌표가 아니다(리뷰 L2: wlan0 없음 기록의 dmesg)
+    o = o substr(l, 1, RSTART - 1) (p ~ /[0-9.A-Za-z]/ || (o substr(l, 1, RSTART - 1)) ~ /\[ *$/ ? m : "[가림: 좌표]")
+    l = substr(l, RSTART + RLENGTH)
+  }
+  return o l
+}
+# 1.7.0: 폰 이름이 들어가는 메서드 줄(addDeviceStatusInfo (<이름>), …StatusUpdate [<이름>], connectivityConnectPP …[<이름>])은
+# 괄호 안이 한 낱말(ASCII)이어도 가린다. "[ b ]"처럼 앞뒤가 띄어진 클래스 표시와 숫자만 있는 것([1], (4))은 남긴다.
+function nmk(l,   o, m, c, n) {
+  o = ""
+  while (match(l, /[[(][^][()]*[])]/)) {
+    m = substr(l, RSTART, RLENGTH); n = RLENGTH
+    c = substr(m, 2, n - 2)
+    # true·false·null은 이름이 아니다(진단 값: Init[false], Auto[true])
+    if (c ~ /[A-Za-z]/ && c !~ /^ .* $/ && c !~ /^ *$/ && c !~ /^(true|false|null|TRUE|FALSE|NULL)$/) m = substr(m, 1, 1) "가림: 이름" substr(m, n, 1)
+    o = o substr(l, 1, RSTART - 1) m
+    l = substr(l, RSTART + n)
+  }
+  return o l
+}
+BEGIN {
+  H = "[0-9A-Fa-f][0-9A-Fa-f]"
+  V = ""; for (i = 0; i < 17; i++) V = V "[A-HJ-NPR-Z0-9]"
+}
+{
+  l = $0
+  if (l ~ / [VDIWEF]\/[^ ]/) l = brk(l)
+  if (l ~ / [VDIWEF]\/(BluetoothHfDevice|HfDevice[A-Za-z]*|BTCM[A-Za-z]*|CallManager|BluetoothPbap[A-Za-z]*|Pbap[A-Za-z]*|Navi|NaviPopupService|NavigationCluster|ClusterService|ClusterManager) *\(/) {
+    gsub(/"[^"]*"/, "\"[가림]\"", l)
+    gsub(/[^ -~]+/, "[가림]", l)
+    gsub(/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*/, "[가림: 번호]", l)
+    if (match(l, /(FN|N|TEL|EMAIL)[;:][^ ]*/)) l = substr(l, 1, RSTART - 1) "[가림: 연락처]"
+  }
+  if (l ~ /(DeviceStatusInfo|StatusUpdate|DeviceInfoAdd|ConnectPP|connectPP|DeviceAddress|[Dd]eviceName|Explorer : \[|Service : \[|[Ss]tatus \[)/) l = nmk(l)
+  if (match(l, /DeviceStatusInfo: */)) l = substr(l, 1, RSTART + RLENGTH - 1) "[이하 가림: 이름]"
+  if (match(l, "^[ \t]*" H ":" H ":" H ":" H ":" H ":" H "[ \t]+[0-9]+[ \t]+-?[0-9]+")) l = "[가림: 주변 Wi-Fi 목록 줄]"
+  t = tolower(l); gsub(/bssid/, "b_sid", t)
+  if (match(t, /ssid|psk *[=:]|connectivitypsk|presharedkey|passphrase|password|passwd|wpa_key|key *[=:]|secret/))
+    l = substr(l, 1, RSTART - 1) "[이하 가림: Wi-Fi 정보]"
+  t = tolower(l); gsub(/classname/, "classnXme", t); gsub(/packagename/, "packagenXme", t); gsub(/filename/, "filenXme", t); gsub(/interfacename/, "interfacenXme", t)
+  # 1.7.0: "Device info name <이름>"(Iap2Service, 니로 2026-11-08)처럼 name 뒤가 띄어쓰기뿐인 꼴도 가린다
+  if (match(t, /name *[=:]|alias *[=:]|device *name|friendly *name|phone *name|remote *name|info *name +|device *[=:]|direct-/))
+    l = substr(l, 1, RSTART + RLENGTH - 1) " [이하 가림: 이름]"
+  # 1.7.0 위치 모자이크(소유자 결정 2026-11-08): 줄은 남기고 위치만 가린다. 교차로·목적지·도로·주소 이름은 그 뒤를,
+  # 좌표(소수점 아래 4자리 넘는 수, lat·lon 뒤의 수)와 NMEA 문장은 그 값만 바꾼다
+  t = tolower(l)
+  if (match(t, /(crossroad|destination|dest|goal|waypoint|roadname|road name|address|addr|poiname|poi name|poi|목적지|경유지|주소)[a-z]*( is |\(\) *: *| *[:=] *| +)/))
+    l = substr(l, 1, RSTART + RLENGTH - 1) "[가림: 위치]"
+  if (match(l, /\$G[PNL][A-Z][A-Z][A-Z],/)) l = substr(l, 1, RSTART - 1) "[가림: NMEA]"
+  l = crd(l)
+  gsub(/([Ll]atitude|[Ll]ongitude|[Ll]at|[Ll]on|[Ll]ng)[ :=]+-?[0-9]+/, "위치값 [가림: 좌표]", l)
+  l = macs(l)
+  l = ips(l)
+  gsub(/[Ff][Ee]80:[0-9A-Fa-f:]*/, "fe80:x", l)
+  gsub(/[23][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f]*:[0-9A-Fa-f:]*/, "v6:x", l)
+  gsub(V, "[VIN 가림]", l)
+  gsub(H "-" H "-" H "-" H "-" H "-" H, "xx-xx-xx-xx-xx-xx", l)
+  gsub(/01[016789] [0-9][0-9][0-9][0-9]? [0-9][0-9][0-9][0-9]/, "01x xxxx xxxx", l)
+  gsub(/\+82[- ]?1[016789][- ]?[0-9][0-9][0-9][0-9]?[- ]?[0-9][0-9][0-9][0-9]/, "+82-xx-xxxx-xxxx", l)
+  gsub(/01[016789]-?[0-9][0-9][0-9][0-9]?-?[0-9][0-9][0-9][0-9]/, "01x-xxxx-xxxx", l)
+  gsub(/0[2-6][0-9]?-[0-9][0-9][0-9][0-9]?-[0-9][0-9][0-9][0-9]/, "0x-xxxx-xxxx", l)
+  gsub(/1[5-9][0-9][0-9]-[0-9][0-9][0-9][0-9]/, "1xxx-xxxx", l)
+  print l
+}'
 # 보관: cp.log가 LOGMAX를 넘으면 cp.log.1~3으로 밀어 최대 4개(기본 3MB씩, 12MB)
 LOGMAX=${LOGMAX:-3145728}
 logstart() {
@@ -423,7 +768,9 @@ logstart() {
   _d=$DROP; echo x | $BB grep -E "$_d" >/dev/null 2>&1; [ $? -le 1 ] || _d='^$'
   # 1.5.6: 안드로이드 오토는 폰에 Wi-Fi 이름·비밀번호를 보낸다. 그런 값이 나올 수 있는 줄은 태그와 상관없이 버린다.
   # "psk"는 값이 붙는 꼴(psk=, psk:)만 버린다: 보안 방식 줄("Auth Type : WPA2_PSK")은 원인을 찾는 데 필요하다(2026-11-07).
-  logcat -v time 2>/dev/null | $BB grep -E "$TAGS" | $BB grep -v -E "$_d" | $BB grep -v -i -E 'ssid|psk *[=:]|passphrase|password|bssid|key=' | $_u >> $W/cp.log &
+  # 1.7.0: 폰 이름·MAC·IP·VIN·전화번호를 가린다(KPMASK). 가리기 awk가 이 busybox에서 안 되면 디버그 로그를 남기지 않는다.
+  echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1 || { log "디버그 로그 안 남김: 가리기(awk)가 이 busybox에서 안 됨"; return 0; }
+  logcat -v time 2>/dev/null | $BB grep -E "$TAGS" | $BB grep -v -E "$_d" | $BB grep -v -i -E 'ssid|psk *[=:]|passphrase|password|bssid|key=' | $BB awk "$KPMASK" | $_u >> $W/cp.log &
   echo $! > $W/log.pid
 }
 # 파이프를 다시 시작하지 않고 파일만 밀어낸다: 다시 시작하면 logcat이 버퍼 전체를 다시 써서
@@ -517,7 +864,9 @@ WIFI_SEEN=${WIFI_SEEN:-$HMGDATA/public/wifi-chip}
 BK=${BK:-/data/nemesis/backup/korea.projection}
 MOD_ID=wireless-carplay-aa
 # 패키지에 든 모드 zip의 md5 (busybox 1.8.1에 sha256sum이 없다). zip을 바꾸면 함께 바꾼다.
-MOD_MD5=42d4e34e2e61f94bb004ae40317642ff
+MOD_MD5=39d3f4e04d044a166bf38b3f4e5ea770
+# 패키지에 든 모드의 버전(mod.json "version"). 1.5.7부터 차에 있는 우리 모드가 이것과 다르면 바꾼다(mod_update).
+MOD_VER=2.2.0
 # 마지막 안내 문구를 기억한다(설치 진행 기록의 실패 사유로 쓴다)
 toast() {
   LAST_TOAST=${1#Korea Projection: }
@@ -604,6 +953,90 @@ mod_foreign() {
 # 무선 모드 mod.json에 한국 차 항목이 있는가: "region": "KOR" 또는 "region": [..., "KOR", ...](공백·탭 무관).
 # busybox가 없으면 toolbox grep(-E 됨, K3 탐사)으로 본다. 파일을 못 읽으면 1(한국 차 항목 없음으로 봄).
 mod_kor() { bbx grep -q -E '"region"[[:space:]]*:[[:space:]]*(\[[^]]*)?"KOR"' $HMGDATA/mods/$MOD_ID/mod.json 2>/dev/null; }
+# 차에 있는 무선 모드의 버전(mod.json의 첫 "version" 줄). 셸만 쓴다(sed·cut 없이). 못 읽으면 빈 값.
+mod_ver() {
+  _mv=
+  while IFS= read -r _l; do
+    case "$_l" in
+      *'"version"'*) _mv=${_l#*\"version\"}; _mv=${_mv#*\"}; _mv=${_mv%%\"*}; break ;;
+    esac
+  done < $HMGDATA/mods/$MOD_ID/mod.json 2>/dev/null
+  echo "$_mv"
+}
+# 1.5.7: 우리가 넣은 한국 차 빌드 모드를 패키지에 든 새 판으로 바꾼다(계기판 안내 수정 등 hooks.jar가 바뀜).
+# 패키지 업데이트(1.5.6 → 1.5.7)는 모드를 건드리지 않으므로 여기서 한다. 하는 조건:
+# - 우리가 넣은 모드(mod.ours)이고 지금도 한국 차 빌드(mod_kor)이며, 차에 있는 판이 패키지 것보다 낮을 때만.
+#   차주가 넣은 다른 판이나 더 새 판은 건드리지 않는다.
+# - 차주가 되돌리기 USB(kp-rollback)로 이전 판을 고정했으면($BK/mod.pin) 하지 않는다.
+# - 같은 버전은 3번까지만 시도한다($BK/mod.upd: "<버전> <횟수>"). 일시적인 실패(엔진이 바쁨)는 다음 부팅에
+#   다시 하고, 3번째도 실패하면 그때 한 번 알린다.
+# - 적용(apply)은 하지 않는다: 이 함수는 부팅 2분 뒤 운행 중에도 돌 수 있고, 적용은 앱을 다시 시작시킬 수 있다.
+#   새 판의 계획이 "nothing changed"(hooks.jar만 바뀜)면 재부팅만 안내하고, 아니면 차를 세운 뒤 앱에서
+#   적용하라고 안내한다. 새 hooks.jar는 다음 재부팅부터 쓰인다.
+# 실패해도 카플레이는 그대로다: 엔진은 설치에 실패하면 모드 폴더를 바꾸지 않는다.
+# 돌려주는 값: 0 바꿈(재부팅 필요), 1 할 일 없음(또는 다음 부팅에 다시), 2 안내가 필요함(문구는 LAST_TOAST)
+mod_update() {
+  [ -f $BK/mod.ours ] && [ ! -f $BK/mod.pin ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && mod_kor || return 1
+  _iv=$(mod_ver)
+  [ -n "$_iv" ] && ver_lt "$_iv" $MOD_VER || return 1
+  _uv=; _un=0
+  [ -f $BK/mod.upd ] && read _uv _un < $BK/mod.upd
+  [ "$_uv" = $MOD_VER ] || _un=0
+  case "$_un" in ''|*[!0-9]*) _un=0 ;; esac
+  [ $_un -lt 3 ] || return 1
+  _un=$((_un + 1))
+  echo "$MOD_VER $_un" > $BK/mod.upd
+  set -- $($BB md5sum < $KP_HMG/$MOD_ID.zip 2>/dev/null)
+  if [ "$1" != $MOD_MD5 ]; then
+    log "무선 모드 업데이트 안 함: 패키지의 zip md5가 다름 (${1:-없음})"
+    return 1
+  fi
+  ptrack 70 run "무선 모드를 새 판($MOD_VER)으로 바꾸는 중입니다"
+  if ! hmgapid engine install $KP_HMG/$MOD_ID.zip > $W/mod-update.txt 2>&1; then
+    log "무선 모드 업데이트 실패($_un/3), 이전 판($_iv) 그대로 ($W/mod-update.txt)"
+    [ $_un -lt 3 ] && return 1
+    LAST_TOAST="무선 모드를 새 판으로 바꾸지 못했습니다. 카플레이는 이전 판으로 계속 됩니다."
+    return 2
+  fi
+  log "무선 모드 업데이트함: $_iv → $MOD_VER"
+  hmgapid engine plan > $W/plan.txt 2>&1
+  if plan_nothing; then
+    return 0
+  fi
+  log "무선 모드 적용은 차주에게 맡김: 계획에 변경이 있음 ($W/plan.txt)"
+  LAST_TOAST="무선 모드를 새 판으로 바꿨습니다. 차를 세운 뒤 HMG-API 앱에서 변경 사항을 적용하고 내비를 재부팅해 주세요."
+  return 2
+}
+# 계획(engine plan)에 적용할 것이 없는가: 모든 줄이 "same …"(이미 그대로) 또는 "nothing changed"·"hook plan:"
+# 안내뿐일 때. 문제(problem)가 있거나 다른 줄이 하나라도 있으면 아니다(차주가 앱에서 보게 둔다).
+# 1.5.7 니로(2026-11-07 21:36): 2.1.0→2.1.1 계획은 "same" 7줄뿐이었다("nothing changed" 줄 없음).
+plan_nothing() {
+  [ -s $W/plan.txt ] || return 1
+  while IFS= read -r _l; do
+    case "$_l" in
+      "same     "*|"hook plan:"*|"") ;;
+      "nothing changed"*problem*) return 1 ;;
+      "nothing changed"*) ;;
+      *) return 1 ;;
+    esac
+  done < $W/plan.txt
+  return 0
+}
+# 버전 비교: $1이 $2보다 낮은가(major.minor.patch, 숫자만 비교하고 "-태그"는 무시). 숫자가 아니면 낮지 않음으로 본다.
+ver_lt() {
+  _x=${1%%-*}; _y=${2%%-*}; _k=0
+  while [ $_k -lt 3 ]; do
+    _p=${_x%%.*}; _q=${_y%%.*}
+    # 빈 칸은 0으로 보고, 숫자가 아닌 글자가 있으면 비교하지 않는다
+    case "$_p$_q" in *[!0-9]*) return 1 ;; esac
+    [ "${_p:-0}" -lt "${_q:-0}" ] && return 0
+    [ "${_p:-0}" -gt "${_q:-0}" ] && return 1
+    case "$_x" in *.*) _x=${_x#*.} ;; *) _x= ;; esac
+    case "$_y" in *.*) _y=${_y#*.} ;; *) _y= ;; esac
+    _k=$((_k + 1))
+  done
+  return 1
+}
 setup_hmgapi() {
   if ! car_in "$(getprop ro.build.product 2>/dev/null)" "$CARS"; then
     ptrack 100 fail "지원하지 않는 차(한국 내수 펌웨어가 아님)입니다. 아무것도 바꾸지 않았습니다."
@@ -621,7 +1054,7 @@ setup_hmgapi() {
   # mod.tried는 남긴다(차주가 일부러 지운 우리 모드는 다시 넣지 않는다).
   [ -f $HMGDATA/mods/$MOD_ID/mod.json ] || rm -f $BK/mod.ours
   # _fail: 안내를 이미 남김(토스트 또는 LAST_TOAST → 마지막 진행 기록 문구) → "설정을 마쳤습니다"로 덮지 않는다
-  _restart=0; _fail=0
+  _restart=0; _fail=0; _upd=0
   # 지도: 차마다 임시 폴더에 다 복사한 뒤 한 번에 옮긴다(도중에 전원이 꺼져 반쪽 지도가 남지 않게).
   # 임시 폴더는 maps/.kp-tmp: HMG-API는 maps/<제조사>/<차종>/<지역>/<펌웨어>/만 읽으므로 반쪽 car.json을 보지 않는다.
   # 이 차의 지도만 넣는다: 폴더의 펌웨어가 같고 car.json의 products에 "<모델>.<지역>."이 있는 것.
@@ -780,6 +1213,16 @@ setup_hmgapi() {
       fi
     fi
   fi
+  # 1.5.7: 이미 있는 우리 모드를 새 판으로(위에서 막 설치했으면 버전이 같아 할 일 없음)
+  if [ $_mapbad = 0 ] && [ $_fail = 0 ]; then
+    mod_update; _mu=$?
+    if [ $_mu = 0 ]; then
+      _restart=1; _upd=1
+    elif [ $_mu = 2 ]; then
+      _fail=1
+      toast "Korea Projection: $LAST_TOAST"
+    fi
+  fi
   # 1.6.1: 차에 이미 있는 무선 모드가 우리가 넣은 것이 아니고 한국 차를 지원하지 않는 판이면(예: HMG-API 기본 2.1.0,
   # 북미 EV6·아이오닉5용, #25 팰리세이드) 덮어쓰지 않는다(차주 것). 대신 무엇을 하면 되는지 알린다.
   # 토스트는 띄우지 않는다(금방 사라짐, 소유자 결정). 안내는 Launch 화면에 남긴다: 진행 기록의 실패 문구(이번 부팅)와,
@@ -792,7 +1235,9 @@ setup_hmgapi() {
     _fail=1
   fi
   # 진행 기록의 마지막 결과(상태 화면 앱이 보여 줌)
-  if [ $_restart = 1 ] && [ $_fail = 0 ]; then
+  if [ $_restart = 1 ] && [ $_fail = 0 ] && [ $_upd = 1 ]; then
+    ptrack 100 reboot "무선 모드를 새 판($MOD_VER)으로 바꿨습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
+  elif [ $_restart = 1 ] && [ $_fail = 0 ]; then
     ptrack 100 reboot "무선 카플레이 설정을 마쳤습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
   elif [ $_fail = 1 ]; then
     ptrack 100 fail "${LAST_TOAST:-무선 카플레이 설정에 실패했습니다. USB를 꽂고 Launch로 제보 파일을 만들어 보내 주세요.}"
@@ -803,11 +1248,13 @@ setup_hmgapi() {
   else
     ptrack 100 fail "${LAST_TOAST:-무선 모드를 넣지 못했습니다. USB를 꽂고 Launch로 제보 파일을 만들어 보내 주세요.}"
   fi
-  if [ $_restart = 1 ] && [ $_fail = 0 ]; then
+  if [ $_restart = 1 ] && [ $_fail = 0 ] && [ $_upd = 1 ]; then
+    toast "Korea Projection: 무선 모드를 새 판($MOD_VER)으로 바꿨습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
+  elif [ $_restart = 1 ] && [ $_fail = 0 ]; then
     if car_in "$_prod" "$CARS_OK"; then
       toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다. 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅)."
     else
-      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다(시험 중인 차). 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅). 되는지 제보해 주시고, 유선 카플레이까지 안 되면 Korea Projection을 삭제하세요."
+      toast "Korea Projection: 무선 카플레이 설정을 마쳤습니다(자동으로 설정한 차). 내비를 재부팅해 주세요(RESET 버튼 또는 NEMESIS 재부팅). 결과를 제보해 주시면 지원 목록에 넣습니다."
     fi
   fi
   return 0
@@ -947,7 +1394,7 @@ remove_app() {
 
 # 쓸 수 있는 busybox가 없을 때(내비에 없고, 함께 넣은 것도 실행되지 않음: 예 /data가 noexec): 이 패키지의 스크립트는
 # busybox로 동작하므로 무선 설정은 하지 않는다(상태 화면 앱만 설치). 안내는 설치 때(post.sh)와 Launch 때(status.sh)
-# 한다. 서비스는 로그만 남기고 대기한다. 1.6.0·1.6.1 알파는 함께 넣은 busybox로 보통 경로를 탔고, 1.5.6은 다시 이렇게 대기한다.
+# 한다. 서비스는 로그만 남기고 대기한다. 1.6.x 알파는 함께 넣은 busybox로 보통 경로를 탄다(1.5.6은 busybox가 없어 이렇게 대기한다).
 has_bb() { [ "$BB_OK" = 1 ]; }
 
 main() {
@@ -1004,10 +1451,42 @@ main() {
   fi
   write_conf
   # 확인된 차가 아니면 순정 핫스팟(다른 hostapd)이 도는 동안 시작하지 않는다(svc wifi enable이 순정 핫스팟을 끈다)
-  if ! car_in "$prod" "$CARS_OK" && stock_ap_on; then
-    log "대기: 다른 hostapd가 돌고 있음(순정 핫스팟 등)"
-    while stock_ap_on; do sleep 60 & wait $!; done
-    log "다른 hostapd가 멈춤: 시작"
+  # 1.6.2: 순정 hostapd가 카플레이 AP(softap.conf의 카플레이 SSID)면 "순정 AP로 준비됨"으로 가고 돌아오지 않는다.
+  # 일반 핫스팟이거나 판단할 수 없으면 예전처럼 순정이 멈출 때까지 기다린다.
+  if ! car_in "$prod" "$CARS_OK"; then
+    # 함께 넣은 busybox를 쓰는 내비(tcc803x, K3·K8)는 순정이 카플레이 AP를 직접 켤 수 있다(K3 #15). 부팅 직후 순정보다
+    # 먼저 wlan0을 가져가지 않게 순정 hostapd를 최대 STOCK_GRACE초 기다린다. 내비에 busybox가 있는 차는 기다리지 않는다.
+    # 아직 확인 안 함: 순정이 부팅 때 스스로 켜는지, 아이폰이 블루투스로 요청할 때만 켜는지(요청 때만이면 이 대기로는
+    # 부족하다. 그때는 ap_yield가 우리 것을 멈추고 순정 AP 경로로 간다).
+    if [ -f $BK/stockap.seen ] && stock_seen_stale; then
+      rm -f $BK/stockap.seen $BK/stockap.miss
+      log "순정 카플레이 AP를 ${STOCK_MISS_MAX}번의 부팅 동안 못 봄: 기록(stockap.seen)을 지우고 보통 흐름으로 돌아감"
+    fi
+    if [ "$BB" = "$BB_OWN" ] && [ ! -f $BK/stockap.seen ] && ! stock_ap_on; then
+      log "순정 카플레이 AP를 최대 ${STOCK_GRACE}초 기다림(busybox 없는 내비)"
+      _g=0
+      while [ $_g -lt $STOCK_GRACE ] && ! stock_ap_on; do sleep 10 & wait $!; _g=$((_g+10)); done
+    fi
+    _ss=$(stock_ssid)
+    if [ "$_ss" = carplay ] || [ -f $BK/stockap.seen ]; then
+      stock_ap_mode
+    fi
+    if [ "$_ss" != none ]; then
+      log "대기: 다른 hostapd가 돌고 있음(순정 핫스팟 등, 판정 $_ss)"
+      # 기다리는 동안에도 판정을 다시 본다: 순정이 카플레이 AP로 바꾸면 순정 AP 경로로 간다. 순정이 hostapd를 다시
+      # 띄우는 틈에 wlan0을 가져가지 않게, 두 번 이어서(약 2분) 없을 때만 끝낸다(리뷰 M3). 끝나는 조건: 순정이 멈춤·TERM.
+      _gone=0
+      while [ $_gone -lt 2 ]; do
+        sleep 60 & wait $!
+        if stock_ap_on; then
+          _gone=0
+          [ "$(stock_ssid)" = carplay ] && stock_ap_mode
+        else
+          _gone=$((_gone+1))
+        fi
+      done
+      log "다른 hostapd가 멈춤: 시작"
+    fi
   fi
   log "시작 ($prod): softap.conf의 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   stop_ap
@@ -1015,6 +1494,7 @@ main() {
   take_wlan0
   logstart
   up
+  aa_sig
   rm -f $CPN
   wifi_events; cp_watch
   # 설정이 끝난 차(재부팅 뒤 등)는 핫스팟이 켜지면 "준비됨". 설정 중이면 진행 기록은 fix_perms가 맡는다.
@@ -1030,10 +1510,11 @@ main() {
     ap_yield && continue
     ap_tick
     up
+    aa_sig
     wifi_events; cp_watch
     n=$((n+1))
     # once an hour: one line with the CarPlay connections
-    [ $((n % 120)) -eq 0 ] && log "동작 중: $($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000") 개 카플레이 연결"
+    [ $((n % 120)) -eq 0 ] && log "동작 중: $(cp_count) 개 카플레이 연결"
   done
 }
 

@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Launch(bin/status.sh)가 뒤에서 띄운다: HMG-API Car Report를 USB에 저장한다(`hmgapid engine report --usb`).
 # 새 차를 추가하려면 이 파일(그 차에서 직접 찾은 훅 지점 이름)이 필요하다. 만드는 데 1분쯤 걸려서,
-# 화면을 기다리게 하지 않으려고 따로 돈다. 끝나면 토스트로 USB를 빼도 된다고 알린다.
+# 1.7.0: status.sh --collect(뒤에서 도는 로그 모으기)가 마지막 단계로 부른다. 끝나면 리포트 진행 기록에 "USB를 빼셔도 됩니다"를 쓴다.
 # - 한 번에 하나만: carreport.lock 폴더(mkdir는 한 번에 하나만 성공). 남은 잠금은 이번 부팅의 살아 있는
 #   carreport.sh가 아니면 지우고 다시 잡는다.
 # - 최대 CR_MAX*CR_WAIT초(기본 5분)만 기다린다. HMG-API 데몬은 우리가 그만 기다려도 보고서를 끝까지 쓰므로,
@@ -28,9 +28,13 @@ USBROOT=${USBROOT:-/storage}
 umask 077
 $BB mkdir -p $W
 
-toast() {
-  am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$1" \
-    --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
+# 1.7.0: 결과는 토스트가 아니라 리포트 진행 기록(RPROG, 644)에 쓴다(소유자 결정: 토스트 안 씀). 상태 화면 앱이 1초마다 읽어
+# "완료: USB를 빼셔도 됩니다"를 보인다. $1: done|fail, $2: 문구
+RPROG=${RPROG:-/data/local/tmp/korea-projection-report-progress.txt}
+result() {
+  ( umask 022
+    $BB printf 'pct=100\nstate=%s\nstage=%s\nstart=%s\nt=%s\nboot=%s\n' "$1" "$2" "${RSTART:-$(date +%s)}" "$(date +%s)" \
+      "$(cat $BOOT_ID 2>/dev/null)" > $RPROG.tmp && $BB chmod 644 $RPROG.tmp && $BB mv -f $RPROG.tmp $RPROG ) 2>/dev/null
 }
 
 L=$W/carreport.lock
@@ -74,13 +78,13 @@ fi
 # vfat는 쓰기를 늦게 내보낸다: "USB를 빼셔도 됩니다" 전에 내보낸다
 sync
 if [ $ok = 1 ] && [ $copied = 1 ]; then
-  toast "Korea Projection: 제보 자료를 모두 저장했습니다(USB의 $RDIR 폴더, 파일 3개). 이제 USB를 빼셔도 됩니다."
+  result done "완료: 제보 자료를 모두 저장했습니다(USB의 $RDIR 폴더). 이제 USB를 빼셔도 됩니다."
 elif [ $ok = 1 ]; then
-  toast "Korea Projection: 제보 자료를 저장했습니다. Car Report는 USB의 'HMG-API reports' 폴더에 있습니다. 이제 USB를 빼셔도 됩니다."
+  result done "완료: 제보 자료를 저장했습니다. Car Report는 USB의 'HMG-API reports' 폴더에 있습니다. 이제 USB를 빼셔도 됩니다."
 else
   # 시간이 넘었으면 HMG-API가 아직 쓰는 중일 수 있다: 조금 더 기다린 뒤 알린다
   [ $late = 1 ] && { sleep $CR_GRACE; sync; }
-  toast "Korea Projection: 제보 자료(Car Report)를 저장하지 못했습니다. USB를 다시 꽂고 Launch를 눌러 주세요."
+  result fail "리포트(1·3번 파일)는 저장했지만 Car Report를 저장하지 못했습니다. 이제 USB를 빼셔도 됩니다. 필요하면 USB를 다시 꽂고 Launch를 눌러 주세요."
 fi
 rm -rf $L
 exit 0

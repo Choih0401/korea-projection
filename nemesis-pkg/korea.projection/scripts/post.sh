@@ -3,11 +3,8 @@
 # uninstall, and stop the stick script's access point (cp-drive.sh) if one is running, so only
 # this package's hostapd has wlan0. NEMESIS starts the service after this.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-# busybox는 아래 hotspot.sh가 고른다(내비의 것만: 1.5.6은 busybox를 함께 넣지 않는다). 비워 두면 고른다.
+# busybox는 아래 hotspot.sh가 고른다(내비의 것, 없으면 패키지에 함께 넣은 것: 1.6.x 알파). 비워 두면 고른다.
 BB=
-# 1.6.x 알파 위에 덮어 설치했을 때 예전에 함께 넣은 busybox가 남아 있으면 지운다(남으면 K3·K8이 1.5.5처럼 대기하지 않고
-# 확인 안 된 경로를 탄다). 1.5.6 패키지에는 이 파일이 없으므로 여기 있는 것은 예전 판의 것이다.
-rm -f /data/nemesis/apps/korea.projection/bin/busybox 2>/dev/null
 BK=/data/nemesis/backup/korea.projection
 umask 077
 mkdir -p $BK
@@ -17,6 +14,10 @@ W=/data/local/tmp/korea.projection
 for u in /storage/usb0 /storage/usb1; do
   [ -f $u/korea-projection-debug ] && mkdir -p $W && : > $W/debug && echo "카플레이 디버그 로그 켬 ($W/cp.log)"
 done
+# 1.7.0 무선 안드로이드 오토(기본 켜짐): USB 맨 위의 kp-aa-off로 끄고 kp-aa-on으로 다시 켠다. 어느 USB든 끄기를 먼저 본다(리뷰 L3).
+# $BK에 남아 업데이트해도 유지된다(삭제하면 지워짐)
+if [ -f /storage/usb0/kp-aa-off ] || [ -f /storage/usb1/kp-aa-off ]; then : > $BK/aa-off; echo "무선 안드로이드 오토 끔"
+elif [ -f /storage/usb0/kp-aa-on ] || [ -f /storage/usb1/kp-aa-on ]; then rm -f $BK/aa-off; echo "무선 안드로이드 오토 켬"; fi
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
 OLD=/data/local/tmp/cpdrive
 P=$(cat $OLD/watchdog.pid 2>/dev/null)

@@ -34,14 +34,15 @@ Korea Projection은 **한국 차라면 일단 켜 봅니다**(1.5.2부터). 설�
 3. USB를 꽂습니다.
    - "Korea Projection을 설치할까요?" 같은 창이 뜨면 **아니요**를 누릅니다.
 4. 내비에서 **NEMESIS Manager**를 엽니다.
-5. **My Packages** → **Korea Projection** → **Launch**를 누릅니다.
-6. 화면 아래에 이 글자가 뜹니다.
-   > 제보 자료를 USB의 KoreaProjection-report 폴더에 저장하는 중입니다(약 1분).
+5. **My Packages** → **Korea Projection: Wireless for Korean Cars**(1.5.6 이하는 Korea Projection 또는 Wireless Projection for Korean Cars) → **Launch**를 누릅니다.
+6. 상태 화면 맨 위에 진행 막대가 뜹니다(1.7.0부터).
+   > 제보 자료 저장 중 N% · … (USB를 빼지 마세요)
 7. **그대로 1~2분 기다립니다.** USB를 빼지 마세요. 시동도 끄지 마세요.
-8. 이 글자가 뜨면 끝입니다. 이제 USB를 빼세요.
-   > 제보 자료를 모두 저장했습니다(USB의 KoreaProjection-report 폴더, 파일 3개). 이제 USB를 빼셔도 됩니다.
+8. 초록색으로 이 글자가 뜨면 끝입니다. 이제 USB를 빼세요.
+   > 완료: 제보 자료를 모두 저장했습니다(USB의 KoreaProjection-report 폴더). 이제 USB를 빼셔도 됩니다.
+   - 1.6.x 이하는 화면 아래 알림(토스트)으로 같은 내용이 뜹니다.
 
-**"저장하지 못했습니다"가 뜨면:** USB를 뺐다가 다시 꽂고, 4번부터 다시 하세요.
+**빨간 글자("저장하지 못했습니다")가 뜨면:** USB를 뺐다가 다시 꽂고, 4번부터 다시 하세요.
 
 ---
 
@@ -116,7 +117,7 @@ USB
 
 보내 주신 `3-log.txt`를 보고 원인을 찾습니다. 한두 번 더 부탁드릴 수 있습니다.
 
-- 언제든 원래대로 돌릴 수 있습니다. NEMESIS Manager에서 Korea Projection을 **삭제(Uninstall)**하면 됩니다. 저희가 설치했던 무선 모드도 함께 지웁니다.
+- 언제든 원래대로 돌릴 수 있습니다. NEMESIS Manager에서 이 패키지(Korea Projection: Wireless for Korean Cars)를 **삭제(Uninstall)**하면 됩니다. 저희가 설치했던 무선 모드도 함께 지웁니다.
 - **유선 카플레이(USB 케이블)는 언제나 그대로 쓸 수 있습니다.**
 
 ---

@@ -16,7 +16,7 @@ body:
 
         **제보 파일 만드는 방법 (Korea Projection 1.5.2 이상)**
         1. 차를 세운 상태에서 USB를 꽂습니다.
-        2. NEMESIS Manager → My Packages → Korea Projection → **Launch**를 누릅니다.
+        2. NEMESIS Manager → My Packages → **Korea Projection: Wireless for Korean Cars**(1.5.6 이하는 Korea Projection 또는 Wireless Projection for Korean Cars) → **Launch**를 누릅니다.
         3. "이제 USB를 빼셔도 됩니다"가 뜰 때까지 1~2분 기다립니다.
         4. USB의 **`KoreaProjection-report`** 폴더에 파일 3개가 생깁니다: `1-report.md`, `2-car-report.json`, `3-log.txt`
         5. 그 폴더를 열고 **모두 선택**(Windows `Ctrl`+`A`, Mac `⌘`+`A`)해서 아래 "제보 파일 3개" 칸에 끌어다 놓아 주세요.

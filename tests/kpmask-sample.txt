@@ -1,0 +1,19 @@
+11-07 22:51:46.650 D/PhoneProjection( 1610): [ WirelessPhoneProjectionService ] addDeviceStatusInfo (홍길동의 Z Fold7), device = AA:BB:CC:DD:EE:FF
+11-08 00:09:27.060 I/PhoneProjection( 1625): [ WirelessPhoneProjectionService ] requestWLDeviceConnectStatusUpdate [Pixel7], connectStatus (4), transferType = 1
+11-08 00:09:26.940 I/PhoneProjection( 1625): [ WirelessPhoneProjectionService ] requestWLDeviceInfoAdd() not exist DeviceStatusInfo: GalaxyS24
+11-08 00:09:27.130 I/PhoneProjection( 1625): [ WirelessPhoneProjectionService ] connectivityConnectPP nReady[1], isFromBT[false], [MyPhone], trans[1]
+11-08 00:10:03.190 I/AAProjection(  789): WirelessExplorer : [Pixel7] Wireless ==> Connecting, name: Pixel7
+11-08 00:10:03.370 D/AAProjection(  789): WirelessExplorer : isWifiApEnable = false, mode = 0
+11-08 00:10:03.370 E/AAProjection(  789): GPM : Failed to find host IP/BSSID 192.168.43.1 10.0.0.5
+11-08 00:09:26.740 I/AAProjection(  789): WirelessExplorer : WifiInfoResponse ssid=MyNet password=secret
+11-08 00:09:26.740 I/AAProjection(  789): WirelessExplorer : [Pixel7] Sent WifiVersionRequest, Protocol version is 1.0
+11-08 00:09:26.860 D/AAProjection(  789): WirelessExplorer : 	WifiVersionResponse status [Pixel7]: STATUS_SUCCESS	selected wifi channel: false
+11-08 00:10:03.190 I/AAProjection(  789): GalReceiverService : [Pixel7] received wireless AA connectPP
+11-08 00:11:00.000 I/PhoneProjection( 1625): [ f ] mac AA-BB-CC-DD-EE-FF phone 010 1234 5678 ConnectivityPSK abcdefgh1
+11-08 01:00:02.000 D/BluetoothHfDevice(  900): +CLIP: "01098765432",129,,,"홍길동"
+11-08 01:00:02.100 D/BluetoothHfDevice(  900): +CLCC: 1,1,4,0,0,"0212345678",129,"Kim Office"
+11-08 01:00:02.200 D/CarPlay_( 1007): firmware V039.001.260902 duration 0.12345 call 02-1234-5678 1588-1234
+11-08 01:00:02.300 I/Navi    ( 600): 서울특별시 중구 세종대로 110
+11-08 01:00:02.400 D/BluetoothPbapClient(  900): FN:Hong Gildong
+11-08 01:56:03.100 D/Iap2Service(  944): send Device info name 시험용폰
+<6>[   12.345678] dhd_module_init: in Dongle Host Driver

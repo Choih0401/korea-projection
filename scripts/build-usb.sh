@@ -32,6 +32,7 @@ printf '[nemesis]\ntype=install\npath=packages/korea.projection.zip\n' > "$W/NEM
 # 파일 이름은 영어로 둔다: 한글 파일 이름은 Windows 압축 풀기에서 깨질 수 있다
 cat > "$W/README.txt" <<EOF
 Korea Projection $VER - USB 설치 파일
+(NEMESIS Manager 목록에서는 "Korea Projection: Wireless for Korean Cars"로 보입니다)
 
 1. USB를 FAT32로 포맷합니다(32GB 이하 USB 권장).
 2. 이 폴더 "안에 있는 것"을 USB 맨 위에 그대로 복사합니다.

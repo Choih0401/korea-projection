@@ -137,6 +137,36 @@ public class ReportTest {
         check("  QR 링크에 support·platform이 들어감", nb.issueUrl().contains("support%3A%20nobb") && nb.issueUrl().contains("platform%3A%20tcc803x"));
         check("  보통 상태 파일은 busybox 없는 내비가 아님(표 15줄 그대로)", !r.nobb() && r.rows().size() == 15);
 
+        // 1.6.2: 순정 카플레이 AP(K3 #15: our_ap=no, our_dhcp는 오판이 고쳐져 no, other_ap=yes)
+        String STOCK = GOOD.replace("our_ap=yes", "our_ap=no").replace("our_dhcp=yes", "our_dhcp=no").replace("other_ap=no", "other_ap=yes")
+            + "stock_ssid=carplay\nap_mode=stock\n";
+        Report st = Report.parse(STOCK);
+        check("1.6.2: 순정 카플레이 AP → '준비됨(내비 Wi-Fi 사용)', 초록, 재부팅 안내 없음",
+            st.verdict().equals("무선 카플레이 준비됨(내비 Wi-Fi 사용). 아이폰을 연결해 보세요.") && st.level() == 0 && !st.verdict().contains("재부팅"));
+        check("  순정 AP + 연결 수 있음 → '연결됨'", Report.parse(STOCK.replace("cp_conn=0", "cp_conn=1")).verdict().equals("무선 카플레이 연결됨"));
+        check("  순정 AP여도 무선 모드가 꺼져 있으면 그 안내(빨강)", Report.parse(STOCK.replace("mod_on=yes", "mod_on=no")).verdict().contains("꺼져 있습니다") &&
+            Report.parse(STOCK.replace("mod_on=yes", "mod_on=no")).level() == 2);
+        check("  순정 AP여도 bridge가 꺼져 있으면 그 안내", Report.parse(STOCK.replace("bridge=on", "bridge=off")).verdict().contains("'Wireless CarPlay' 설정이 꺼져"));
+        check("  표에 '무선 카플레이 Wi-Fi: 내비 순정 Wi-Fi'와 핫스팟 칸 설명", "내비 순정 Wi-Fi".equals(row(st, "무선 카플레이 Wi-Fi")) &&
+            row(st, "핫스팟 (hostapd)").startsWith("아니요 (순정 Wi-Fi를 쓰므로"));
+        Report hs = Report.parse(GOOD.replace("our_ap=yes", "our_ap=no").replace("other_ap=no", "other_ap=yes") + "stock_ssid=hotspot\nap_mode=none\n");
+        check("  순정 일반 핫스팟(ap_mode=none)은 예전처럼 '핫스팟이 꺼져' 안내, 노랑", hs.verdict().startsWith("핫스팟이 꺼져") && hs.level() == 1 &&
+            "없음".equals(row(hs, "무선 카플레이 Wi-Fi")));
+        check("  ap_mode=ours는 예전과 같은 '준비됨'", Report.parse(GOOD + "stock_ssid=none\nap_mode=ours\n").verdict().equals("무선 카플레이 준비됨. 아이폰을 연결해 보세요."));
+        check("  예전 상태 파일(ap_mode 없음)은 표 15줄 그대로", r.rows().size() == 15 && row(r, "무선 카플레이 Wi-Fi") == null);
+        String sd = java.net.URLDecoder.decode(st.issueUrl(), "UTF-8");
+        check("  QR 요약에 ap_mode·stock_ssid", sd.contains("ap_mode: stock") && sd.contains("stock_ssid: carplay"));
+        Report off = Report.parse(GOOD.replace("our_ap=yes", "our_ap=no").replace("our_dhcp=yes", "our_dhcp=no") + "stock_ssid=none\nap_mode=none\nstock_seen=yes\n");
+        check("  순정 AP를 쓰는 차인데 지금 꺼져 있으면 '내비 Wi-Fi가 꺼져' 안내(우리 핫스팟 재부팅 안내 아님), 노랑",
+            off.verdict().startsWith("내비 Wi-Fi(무선 카플레이용)가 지금 꺼져 있습니다") && off.level() == 1);
+        // 1.7.0: Wi-Fi 장치(wlan0)가 생기지 않아 핫스팟을 못 켬(그랜저 IG #52·#53)
+        Report nw = Report.parse(GOOD.replace("our_ap=yes", "our_ap=no") + "nowlan=yes\nap_mode=none\n");
+        check("1.7.0 wlan0 없음 → 'Wi-Fi 장치가 켜지지 않아' 안내(재부팅·리포트)", nw.verdict().startsWith("Wi-Fi 장치가 켜지지 않아 핫스팟을 켜지 못했습니다"));
+        check("  nowlan=no면 예전 '핫스팟이 꺼져' 안내", Report.parse(GOOD.replace("our_ap=yes", "our_ap=no") + "nowlan=no\n").verdict().startsWith("핫스팟이 꺼져"));
+        check("  무선 AA 칸: aa=yes '켜짐', aa=no '꺼짐(kp-aa-off)', 표 줄 수는 그대로", row(Report.parse(GOOD + "aa=yes\n"), "무선 안드로이드 오토 기능").endsWith("· 켜짐")
+            && row(Report.parse(GOOD + "aa=no\n"), "무선 안드로이드 오토 기능").endsWith("· 꺼짐(kp-aa-off)") && Report.parse(GOOD + "aa=yes\n").rows().size() == 15);
+        String nq = java.net.URLDecoder.decode(Report.parse(GOOD + "state=reboot\naa=yes\nnowlan=yes\n").issueUrl(), "UTF-8");
+        check("  QR 요약에 state·aa·nowlan", nq.contains("state: reboot") && nq.contains("aa: yes") && nq.contains("nowlan: yes"));
         System.out.println(fails == 0 ? "Java 모두 통과" : "Java 실패 " + fails + "개");
         System.exit(fails == 0 ? 0 : 1);
     }

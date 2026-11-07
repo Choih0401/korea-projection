@@ -4,7 +4,7 @@
 # 리포트에는 이름, 버전, 예/아니요, 개수만 넣는다. SSID, 비밀번호, 휴대폰 이름, MAC, IP는
 # 넣지 않는다. 차 주인이 읽어 본 뒤 첨부한다.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-# busybox는 hotspot.sh가 고른다(내비의 것. 함께 넣은 busybox는 1.6.x 알파에만 있었다)
+# busybox는 hotspot.sh가 고른다(내비의 것, 없으면 패키지에 함께 넣은 것: 1.6.x 알파)
 APP=${APP:-/data/nemesis/apps/korea.projection}
 HOTSPOT_LIB=1 . $APP/svc/hotspot.sh
 ISSUES=https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml
@@ -22,6 +22,13 @@ if [ "$1" = --wait ]; then
 fi
 
 yn() { if "$@" >/dev/null 2>&1; then echo 예; else echo 아니요; fi; }
+# 1.6.2: 무선 카플레이 AP를 누가 띄웠는가. ours: 우리 hostapd, stock: 순정이 카플레이 SSID로 띄움(hotspot.sh stock_ssid),
+# none: 둘 다 아님. parse_conf를 먼저 부른다. 첫 인자로 이미 구한 stock_ssid 값을 받을 수 있다.
+ap_mode() {
+  if running "hostapd $CONF"; then echo ours
+  elif [ "${1:-$(stock_ssid)}" = carplay ]; then echo stock
+  else echo none; fi
+}
 # USB가 마운트돼 있는가 (마운트 지점 폴더는 USB가 없어도 있을 수 있어 /proc/mounts로 본다)
 USBS="/storage/usb0 /storage/usb1"
 usb_in() {
@@ -81,6 +88,17 @@ if ! has_bb; then
   fi
   exit 0
 fi
+# 1.7.0 무선 안드로이드 오토(기본 켜짐) 끄기·켜기: Launch 때 USB 맨 위의 kp-aa-off(끔, 먼저 봄) 또는 kp-aa-on(다시 켬).
+# 끌 때는 신호를 여기서 바로 내린다(켤 때는 서비스가 30초 안에 맞춘다). 토스트는 쓰지 않는다(소유자 결정): 상태 화면·리포트에 보인다.
+for u in $USBS; do
+  bbx grep -q " $u " /proc/mounts 2>/dev/null || continue
+  if [ -f $u/kp-aa-off ]; then
+    bbx mkdir -p $BK 2>/dev/null; : > $AAOFF; aa_sig 0
+  elif [ -f $u/kp-aa-on ]; then
+    rm -f $AAOFF
+  fi
+  break
+done
 # 표준입력의 마지막 $1줄만 내면서 휴대폰 블루투스 주소(MAC)와 IP 주소를 x로 지운다(busybox tail 대신 awk)
 lastmask() {
   # n = n + 0: 오래된 busybox awk에서 -v 값이 문자열로 비교되지 않게 숫자로 만든다
@@ -93,19 +111,73 @@ lastmask() {
         print l } }'
 }
 # 분석용 로그(3-log.txt): 서비스 로그, 자동 설정 기록, HMG-API 로그.
-# 휴대폰 이름이 들어가는 디버그 로그(cp.log)는 넣지 않는다. Wi-Fi 이름·비밀번호는 원래 어느 로그에도 없다.
+# 1.7.0: 폰 프로젝션·카플레이·계기판·음악 logcat과 디버그 로그(cp.log, 켜져 있을 때만)도 넣는다. 이 칸들은 KPMASK로
+# 폰 이름·MAC·IP·전화번호를 가린다. 가리기 awk가 안 되는 busybox면 넣지 않는다.
 logs() {
   echo "# Korea Projection 로그 ($(date '+%Y-%m-%d %H:%M'))"
   echo "제품: $(getprop ro.build.product), 패키지 $(pver $APP/NEMESIS.data)"
-  echo "휴대폰 블루투스 주소와 IP 주소는 x로 지웠습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보가 보이면 그 줄을 지워 주세요."
-  for _f in $APLOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
+  echo "휴대폰 이름, 블루투스 주소, IP 주소, 전화번호는 가렸습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보(폰 이름, 연락처 이름 등)가 보이면 그 줄을 지워 주세요."
+  for _f in $APLOG $NOWLAN_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
     echo; echo "== ${_f##*/}"
     if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
   done
+  rprog 20 run "로그를 모으는 중입니다(HMG-API 로그)"
   echo; echo "== HMG-API 로그 (마지막 800줄)"
   $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | lastmask 800
+  rprog 30 run "로그를 모으는 중입니다(Wi-Fi)"
   echo; echo "== Wi-Fi 로그 (logcat, 마지막 300줄)"
   wifilog
+  echo; echo "== 폰 프로젝션 로그 (안드로이드 오토·무선 폰 프로젝션·블루투스, logcat, 마지막 400줄)"
+  echo "폰 이름·MAC·IP는 가렸습니다. 첨부하기 전에 한 번 읽어 보시고, 폰 이름이 보이면 그 줄을 지워 주세요."
+  rprog 40 run "로그를 모으는 중입니다(폰 프로젝션)"
+  pplog
+  rprog 55 run "로그를 모으는 중입니다(카플레이·길안내·차량 데이터, 시간이 조금 걸립니다)"
+  echo; echo "== 연결·차량 데이터 로그 (카플레이·계기판 길안내·차량 속도·기어·전화·음악, logcat, 마지막 3000줄)"
+  echo "같은 내용이 연달아 나오면 한 줄로 줄이고 앞에 [xN](N번 반복)을 붙였습니다. 위치(좌표·교차로·목적지 이름)는 [가림: 위치]로 바꿨습니다."
+  cplog
+}
+# 1.7.0: 디버그 로그(cp.log, 차주가 켰을 때만)는 운행 기록이라 공개 이슈에 붙는 3-log.txt에 넣지 않는다(CLAUDE.md 5장,
+# 리뷰 H1). USB에 따로 4-debug-private.txt로 두고 "공개 첨부 금지"를 맨 위에 적는다. 마지막 8000줄만 먼저 자른 뒤
+# KPMASK로 가린다(리뷰 M2: 6MB 전체를 가리면 오래 걸린다). 가리기 awk가 안 되면 만들지 않는다.
+privlog() {
+  echo "# Korea Projection 디버그 로그 (비공개)"
+  echo
+  echo "**이 파일은 GitHub 이슈에 올리지 마세요.** 운행 기록(길안내·음악 등)이 들어 있습니다."
+  echo "필요할 때 개발자에게 따로(카톡·메일) 보내 주세요. 폰 이름·MAC·IP·전화번호는 가렸지만, 모든 꼴을 장담하지는 못합니다."
+  echo
+  $BB cat $W/cp.log.1 $W/cp.log 2>/dev/null | $BB awk -v n=8000 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' | $BB awk "$KPMASK"
+}
+# 1.7.0(소유자 결정 2026-11-08): Launch는 폰 프로젝션과 관련된 기록을 가능한 모두 모은다. 카플레이(iAP2·DiPO·CarPlay),
+# 계기판·HUD 길안내(NavigationCluster·ClusterService·Navi), 폰에 보내는 차량 데이터(속도 VehicleInfoManager·SystemService,
+# 기어 PgsService·LocationInfoManager, 조향 후보 vhandler), 전화(BluetoothHfDevice·BTCMListenerManager·Telecom 쪽),
+# 음악(MediaStatus·MusicStreaming·AVRCP·A2DP). 태그는 니로 logcat에서 실제로 나온 이름이다.
+# 잡음(DROP, pcm_write, getCANStatus)은 버리고, 같은 내용(앞 두 칸 시각 제외)이 연달아 나오면 한 줄과 [xN]으로 줄인다(괄호 안을 ASCII 한 낱말로: KPMASK가 이름으로 보지 않게).
+# KPMASK로 가린다: 폰·연락처 이름, 번호, MAC, IP, 그리고 위치는 줄을 남긴 채 [가림: 위치]·[가림: 좌표]로 바꾼다(소유자 결정).
+CPTAGS=' [VDIWEF]/(iAP2|Iap2Service|CarPlay_|CarPlayService|TccCarPlay|DiPOManager|DiPOService|NavigationCluster|ClusterService|ClusterManager|Navi|NaviPopupService|VehicleInfoManager|SystemService|PgsService|vhandler|BCMService|MicomAudioService|MediaStatus|MusicStreaming|MediaGate|MediaFocusControl|SplitScreenViewMedia|SplitBtAudioManager|AvrcpControllerService|MobisAvrcpControllerService|BluetoothAvrcpCT|BluetoothA2dp|A2dpStateMachine|BTA_BT_PLAYER_MANAGER|BluetoothHfDevice|HfDeviceBTCMSppApi|BTCMListenerManager|BTCMService|CallManager|InCallService|Telecom|TelephonyManager) *\('
+# 연달아 같은 내용(시각 두 칸을 뺀 나머지)이면 한 줄로: 마지막 것과 횟수를 남긴다
+cpdedup() {
+  $BB awk '{ k = $0; sub(/^[^ ]+ [^ ]+ /, "", k)
+    if (k == pk) { c++; last = $0; next }
+    if (NR > 1) print (c > 1 ? "[x" c "] " : "") last
+    pk = k; c = 1; last = $0 }
+    END { if (NR > 0) print (c > 1 ? "[x" c "] " : "") last }'
+}
+cplog() {
+  echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1 || { echo "(이 내비의 busybox로는 가릴 수 없어 넣지 않음)"; return 0; }
+  # 디버그 로그의 DROP과 달리 교차로 이름 줄은 버리지 않는다(위치는 KPMASK가 가린다, 반복은 cpdedup이 줄인다)
+  _cd='iAPSendMessage\(\) : done with \(0x00\)|iAPSendMessage Command Received|getCANSTatus = true|getCANStatus|pcm_write failed'
+  echo x | $BB grep -E "$_cd" >/dev/null 2>&1; [ $? -le 1 ] || _cd='^$'
+  logcat -d -v time 2>/dev/null | $BB grep -E "$CPTAGS" | $BB grep -v -E "$_cd" \
+    | cpdedup | $BB awk -v n=3000 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' \
+    | $BB awk "$KPMASK" | lastmask 3000
+}
+# 1.7.0: 폰 프로젝션 전체 기록. AA를 시도한 직후(2분 안에) Launch를 눌러야 버퍼에 남아 있다.
+# 태그 + 메시지 낱말로 고르고, KPMASK로 가린다. 가리기 awk가 안 되는 busybox면 아무 줄도 내지 않는다.
+PPTAGS=' [VDIWEF]/(AAProjection|PhoneProjection|WifiP2pService|BluetoothSocket|BluetoothServerSocket|bt-rfcomm|HfDeviceBTCMSppApi|BTCMService|ModeManagerService) *\('
+PPKEYS='[Pp]rojection|[Aa]ndroid ?[Aa]uto|[Rr][Ff][Cc][Oo][Mm][Mm]|WifiStart|WifiInfo|Already AA'
+pplog() {
+  echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1 || { echo "(이 내비의 busybox로는 가릴 수 없어 넣지 않음)"; return 0; }
+  logcat -d -v time 2>/dev/null | $BB grep -E "$PPTAGS|$PPKEYS" | $BB awk "$KPMASK" | lastmask 400
 }
 # Wi-Fi 서비스·드라이버·핫스팟 쪽 logcat(1.5.4: 그랜저 하이브리드 #12에서 핫스팟이 30초마다 끊긴 원인을 보려고).
 # 지금 logcat 버퍼에 남은 것만 본다(-d). Wi-Fi 이름·비밀번호·주변 네트워크·기기 이름이 나올 수 있는 줄은
@@ -122,6 +194,12 @@ report() {
   prod=$(getprop ro.build.product)
   echo "# Korea Projection 리포트"
   echo
+  # 1.7.0: 설치는 끝났지만 재부팅 전에 만든 리포트(#41·#48)는 맨 위에 알린다
+  if $BB grep -q '^state=reboot$' $PROG 2>/dev/null \
+    && [ "$($BB awk -F= '$1 == "boot" { print $2 }' $PROG 2>/dev/null)" = "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" ]; then
+    echo "**아직 재부팅하지 않았습니다. 내비를 재부팅한 뒤 리포트를 다시 만들어 주세요.**"
+    echo
+  fi
   echo "첨부하기 전에 읽어 보세요. 이름, 버전, 예/아니요, 개수만 들어 있습니다"
   echo "(SSID, 비밀번호, 휴대폰 이름, MAC, IP 주소는 없습니다)."
   echo "제보: $ISSUES"
@@ -133,8 +211,8 @@ report() {
   echo "- 이 패키지 버전: $(pver $APP/NEMESIS.data)"
   echo "- 설치 진행: $($BB awk -F= '$1 == "state" || $1 == "pct" || $1 == "stage" { printf "%s=%s  ", $1, $2 }' $PROG 2>/dev/null)"
   if car_in "$prod" "$CARS_OK"; then echo "- 확인된 차: 예"
-  elif car_in "$prod" "$CARS_TRY"; then echo "- 확인된 차: 시험 지원 (차에서 아직 확인되지 않음, 결과를 알려 주세요)"
-  elif car_in "$prod" "$CARS_AUTO"; then echo "- 확인된 차: 자동 시험 (이 차용 설정 없이 HMG-API가 차에서 지도를 만들어 시도, 결과를 알려 주세요)"
+  elif car_in "$prod" "$CARS_TRY"; then echo "- 확인된 차: 시험 지원 (이 차용 설정이 패키지에 있음, 결과를 알려 주세요)"
+  elif car_in "$prod" "$CARS_AUTO"; then echo "- 확인된 차: 자동 설정 (HMG-API가 차에서 지도를 만들어 설정, 결과를 알려 주세요)"
     for _f in automap.bad automap.checked automap.foreign; do [ -f $BK/$_f ] && echo "  - 기록: $_f"; done
   else echo "- 확인된 차: 아니요 (서비스가 대기만 함, 지원 차: $CARS)"; fi
   echo "- NEMESIS: $(nemesis version 2>/dev/null)"
@@ -164,10 +242,15 @@ report() {
   echo "- Wi-Fi 설정(wifi_on): $(settings get global wifi_on 2>/dev/null)"
   parse_conf $SRC
   echo "- softap.conf: $(yn [ -s $SRC ]), 찾은 문자열 ${NS:-0}개, 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
-  echo "- 우리 hostapd: $(yn running "hostapd $CONF"), 우리 DHCP: $(yn running "$DNSMASQ")"
+  echo "- 우리 hostapd: $(yn running "hostapd $CONF"), 우리 DHCP: $(yn our_dhcp_on)"
   echo "- 다른 hostapd (순정 핫스팟): $(yn stock_ap_on)"
+  # 1.6.2: 순정 hostapd의 SSID가 카플레이용(carplay)인지 일반 핫스팟(hotspot)인지. 값은 비교만 한다.
+  _rs=$(stock_ssid)
+  echo "- 무선 카플레이 AP: ap_mode=$(ap_mode $_rs) (순정 hostapd 판정: $_rs, 순정 카플레이 AP 기록: $(yn [ -f $BK/stockap.seen ]))"
   echo "- wpa_supplicant: $(yn running wpa_supplicant)"
-  echo "- 지금 카플레이 연결 수: $($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
+  echo "- 지금 카플레이 연결 수: $(cp_count)"
+  if [ -f $AAOFF ]; then _aas="꺼짐(USB kp-aa-off로 끔)"; else _aas="켜짐(기본)"; fi
+  echo "- 무선 안드로이드 오토: $_aas, 모드에 알린 신호 $(getprop $AAPROP 2>/dev/null)"
   echo
   echo "## 순정 파일 체크섬 (새 차 추가용)"
   echo "무선 모드의 패치 세트(patches/<차>/stock)를 만드는 데 씁니다. 차종·펌웨어마다 같은 값이라 개인정보가 아닙니다."
@@ -259,10 +342,20 @@ status_kv() {
   echo "ssid_len=${#S2}"
   echo "pass_len=${#S4}"
   echo "our_ap=$(yesno running "hostapd $CONF")"
-  echo "our_dhcp=$(yesno running "$DNSMASQ")"
+  echo "our_dhcp=$(yesno our_dhcp_on)"
   echo "other_ap=$(yesno stock_ap_on)"
+  _ks=$(stock_ssid)
+  echo "stock_ssid=$_ks"
+  echo "ap_mode=$(ap_mode $_ks)"
+  # 이 차에서 순정 카플레이 AP를 본 적이 있는가(서비스는 그 차에서 우리 핫스팟을 켜지 않는다)
+  echo "stock_seen=$(yesno [ -f $BK/stockap.seen ])"
   echo "wpa=$(yesno running wpa_supplicant)"
-  echo "cp_conn=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
+  echo "cp_conn=$(cp_count)"
+  # 1.7.0: 설치 진행 상태(run·done·reboot·fail, 없으면 none)와 무선 안드로이드 오토(시험) 켜짐
+  _ps=$($BB awk -F= '$1 == "state" { print $2 }' $PROG 2>/dev/null); echo "state=${_ps:-none}"
+  echo "aa=$(yesno [ ! -f $AAOFF ])"
+  # 1.7.0: 이번 부팅에 Wi-Fi 장치(wlan0)가 생기지 않아 핫스팟을 못 켠 기록(hotspot.sh wlan_fail)
+  echo "nowlan=$(yesno nowlan_now)"
   echo "made=$(date '+%Y-%m-%d %H:%M')"
 }
 ( umask 022; status_kv > $STATUS.tmp 2>/dev/null && $BB chmod 644 $STATUS.tmp && $BB mv -f $STATUS.tmp $STATUS )
@@ -272,19 +365,87 @@ status_kv() {
 install_app_once
 
 R=$W/korea-projection-report.md
+G=$W/korea-projection-log.txt
+# --- 1.7.0 Launch 진행 표시(소유자 결정 2026-11-08): 토스트를 쓰지 않는다 ---
+# 빠른 부분(상태 파일, 1-report.md)은 여기서 바로 하고 화면을 연다. 오래 걸리는 부분(3-log.txt 로그 모으기, USB 복사,
+# 비공개 디버그 로그, HMG-API Car Report)은 뒤에서(status.sh --collect) 하며 진행을 RPROG(644)에 쓴다.
+# 상태 화면 앱이 1초마다 읽어 "제보 자료 저장 중 N%" 막대와 끝나면 "완료: USB를 빼셔도 됩니다"를 보인다.
+RPROG=${RPROG:-/data/local/tmp/korea-projection-report-progress.txt}
+RSTART=${RSTART:-$(date +%s)}
+rprog() {
+  ( umask 022
+    $BB printf 'pct=%s\nstate=%s\nstage=%s\nstart=%s\nt=%s\nboot=%s\n' "$1" "$2" "$3" "$RSTART" "$(date +%s)" \
+      "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" > $RPROG.tmp \
+      && $BB chmod 644 $RPROG.tmp && $BB mv -f $RPROG.tmp $RPROG ) 2>/dev/null
+  return 0
+}
+# 뒤에서 도는 로그 모으기: 끝나는 조건은 각 단계 자체(logcat -d, 파일 복사, carreport.sh의 제한 시간)다. 반복 없음.
+# 이번 부팅에 살아 있는 다른 로그 모으기(status.sh --collect·--wait)가 있는가(리뷰 M1: 둘이 겹쳐 같은 파일을 쓰지 않게)
+collect_alive() {
+  _cp=$(cat $W/collect.pid 2>/dev/null); set -- $_cp
+  [ -n "$1" ] && [ "$1" != "$$" ] && [ "$2" = "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" ] && [ -d /proc/$1 ] \
+    && $BB grep -q status.sh /proc/$1/cmdline 2>/dev/null
+}
+collect() {
+  collect_alive && return 0
+  echo "$$ $(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" > $W/collect.pid
+  _collect
+  rm -f $W/collect.pid
+}
+_collect() {
+  rprog 10 run "로그를 모으는 중입니다(서비스·HMG-API 로그)"
+  logs > $G 2>/dev/null; $BB chmod 600 $G
+  rprog 75 run "USB에 저장하는 중입니다"
+  where=""
+  for u in $USBS; do
+    # 마운트 지점 폴더는 USB가 없어도 있을 수 있다: /proc/mounts로 확인
+    # 제보 자료는 USB의 한 폴더($RDIR)에 정해진 이름으로 둔다: 1-report.md, 2-car-report.json(carreport.sh), 3-log.txt
+    # 예전 Launch의 2-car-report.json·4번은 지운다(새 파일과 섞이지 않게)
+    $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB mkdir -p "$u/$RDIR" && $BB rm -f "$u/$RDIR/2-car-report.json" "$u/$RDIR/4-debug-private.txt" \
+      && $BB cp $R "$u/$RDIR/1-report.md" 2>/dev/null && $BB cp $G "$u/$RDIR/3-log.txt" 2>/dev/null && sync && where=$u && break
+  done
+  if [ -z "$where" ]; then
+    rprog 100 fail "USB에 저장하지 못했습니다(USB가 빠졌거나 쓸 수 없음). USB를 다시 꽂고 Launch를 눌러 주세요."
+    return 0
+  fi
+  # 1.7.0: 디버그 로그를 켠 차만 4-debug-private.txt(비공개)를 따로 둔다
+  if [ -f $W/cp.log ] && echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1; then
+    rprog 80 run "디버그 로그를 저장하는 중입니다"
+    privlog > "$where/$RDIR/4-debug-private.txt" 2>/dev/null; sync
+  fi
+  # HMG-API Car Report도 같은 폴더에 저장한다(1분쯤). 1.7.0: 늘 만든다(#41). 결과(완료·실패)는 carreport.sh가 RPROG에 쓴다.
+  if command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then
+    rprog 85 run "HMG-API Car Report를 만드는 중입니다(약 1분). USB를 빼지 마세요."
+    BB=$BB W=$W RDIR=$RDIR RPROG=$RPROG RSTART=$RSTART sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1
+    $BB grep -q -E '^state=(done|fail)$' $RPROG 2>/dev/null && return 0
+    # 다른 carreport.sh가 아직 USB에 쓰는 중이라(잠금) 이것이 바로 끝났다: 잠금이 풀릴 때까지(최대 약 7분) 기다린 뒤 완료라고 쓴다
+    # (리뷰 M1: 쓰는 중에 "USB를 빼셔도 됩니다"가 뜨지 않게). 끝나는 조건: 잠금이 사라짐 또는 시간.
+    _lw=0
+    while [ -d $W/carreport.lock ] && [ $_lw -lt 210 ]; do sleep 2; _lw=$((_lw+1)); done
+  fi
+  rprog 100 done "완료: 제보 자료를 USB의 $RDIR 폴더에 저장했습니다. 이제 USB를 빼셔도 됩니다."
+}
+if [ "$1" = --collect ]; then
+  collect
+  exit 0
+fi
+
 report > $R 2>/dev/null
 $BB chmod 600 $R
-G=$W/korea-projection-log.txt
-# 로그 모으기는 몇 초 걸릴 수 있어 USB가 있을 때만 한다
-if usb_in; then logs > $G 2>/dev/null; $BB chmod 600 $G; fi
-where=""
-for u in $USBS; do
-  # 마운트 지점 폴더는 USB가 없어도 있을 수 있다: /proc/mounts로 확인
-  # 제보 자료는 USB의 한 폴더($RDIR)에 정해진 이름으로 둔다: 1-report.md, 2-car-report.json(carreport.sh), 3-log.txt
-  # 예전 Launch의 2-car-report.json은 지운다(새 1·3번과 섞이지 않게. 필요하면 carreport.sh가 새로 만든다)
-  $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB mkdir -p "$u/$RDIR" && $BB rm -f "$u/$RDIR/2-car-report.json" \
-    && $BB cp $R "$u/$RDIR/1-report.md" 2>/dev/null && $BB cp $G "$u/$RDIR/3-log.txt" 2>/dev/null && sync && where=$u && break
-done
+usb_in || rm -f $RPROG
+# 로그 모으기는 시간이 걸려 USB가 있을 때만, 뒤에서 한다(한 번에 하나만). RPT_SYNC=1이면 여기서 바로(설치 대기 --wait, 테스트).
+if usb_in; then
+  if [ "${RPT_SYNC:-0}" = 1 ] || [ $WAITED = 1 ]; then
+    collect
+  else
+    if collect_alive; then
+      :   # 이미 모으는 중
+    else
+      rprog 5 run "제보 자료를 모으기 시작했습니다"
+      BB=$BB RSTART=$RSTART $BB setsid sh $APP/bin/status.sh --collect </dev/null >/dev/null 2>&1 &
+    fi
+  fi
+fi
 
 # 설치가 아직 진행 중이면 끝난 뒤에 한 번 더 돌도록 뒤에 남긴다(한 번에 하나만, 이번 부팅의 것만)
 if [ $WAITED = 0 ] && $BB grep -q '^state=run$' $PROG 2>/dev/null; then
@@ -294,25 +455,16 @@ if [ $WAITED = 0 ] && $BB grep -q '^state=run$' $PROG 2>/dev/null; then
     echo $! > $W/wait.pid
   fi
 fi
-# 상태는 이어서 열리는 화면(StatusActivity)이 보여 준다. 토스트는 USB에 리포트를 저장했을 때만.
-[ -n "$where" ] || exit 0
-a=off; running "hostapd $CONF" && a=on
-d=off; running "$DNSMASQ" && d=on
-c=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")
-# 켜짐/꺼짐
-[ $a = on ] && a=켜짐 || a=꺼짐; [ $d = on ] && d=켜짐 || d=꺼짐
-m="Korea Projection: 핫스팟 $a, DHCP $d, 카플레이 연결 $c개"
-m="$m. 제보 자료를 USB의 $RDIR 폴더에 저장했습니다."
-# 확인된 차가 아니거나(시험 지원 차 포함) HMG-API 훅이 켜져 있지 않으면, 새 차 추가·결과 분석에 필요한
-# HMG-API Car Report도 뒤에서 만들어 같은 폴더에 저장한다(1분쯤, 화면은 기다리지 않음). 끝나면 carreport.sh가 토스트로 알린다.
-_need=0
-car_in "$(getprop ro.build.product)" "$CARS_OK" || _need=1
-_hk=$(hooks_state); [ "${_hk%% *}" = on ] || _need=1
-if [ $_need = 1 ] && command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then
-  BB=$BB W=$W RDIR=$RDIR $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
-  m="Korea Projection: 제보 자료를 USB의 $RDIR 폴더에 저장하는 중입니다(약 1분). '이제 USB를 빼셔도 됩니다'가 뜰 때까지 꽂아 두세요."
+# 상태와 저장 진행은 이어서 열리는 화면(StatusActivity)이 보여 준다. 토스트는 쓰지 않는다(1.7.0 소유자 결정).
+# 표준출력에는 한 줄 요약을 남긴다(NEMESIS 기록·테스트용).
+c=$(cp_count)
+parse_conf $SRC
+if [ "$(ap_mode)" = stock ]; then m="Korea Projection: 무선 카플레이 준비됨(내비 Wi-Fi 사용), 카플레이 연결 $c개"
+else
+  a=꺼짐; running "hostapd $CONF" && a=켜짐
+  d=꺼짐; our_dhcp_on && d=켜짐
+  m="Korea Projection: 핫스팟 $a, DHCP $d, 카플레이 연결 $c개"
 fi
+usb_in && m="$m. 제보 자료를 USB의 $RDIR 폴더에 저장하는 중입니다(화면에 진행이 보입니다)."
 echo "$m"
-am broadcast -a com.hkmc.intent.action.TOAST -e com.hkmc.intent.extra.TOAST_MESSAGE "$m" \
-  --ez com.hkmc.intent.extra.TOAST_POPUPSHOWING true >/dev/null 2>&1
 exit 0

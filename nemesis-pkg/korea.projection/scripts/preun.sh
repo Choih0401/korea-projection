@@ -4,7 +4,7 @@
 # 같은 USB 버스에 있는 것으로 보임) 블루투스 카플레이가 재부팅 전까지 되지 않았다. 일반 Wi-Fi는 차를 껐다
 # 켜면 돌아온다(wifi_on이 켜져 있으므로). 설치 전에 Wi-Fi가 꺼져 있던 차만 다시 끈다.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-# busybox는 아래 hotspot.sh가 고른다(내비의 것. 함께 넣은 busybox는 1.6.x 알파에만 있었다)
+# busybox는 아래 hotspot.sh가 고른다(내비의 것, 없으면 패키지에 함께 넣은 것: 1.6.x 알파)
 BB=
 BK=/data/nemesis/backup/korea.projection
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
@@ -18,7 +18,8 @@ rm -f $PROG $PROG.tmp
 rm -rf $W
 # 상태 화면용 파일 (bin/status.sh가 $W 밖에 쓴다)
 rm -f /data/local/tmp/korea-projection-status.txt /data/local/tmp/korea-projection-status.txt.tmp
-$BB ifconfig wlan0 0.0.0.0 2>/dev/null
+# 1.6.2: 순정 hostapd가 돌고 있으면(순정 카플레이 AP 등) 그 주소는 순정 것이라 지우지 않는다(지우면 순정 카플레이가 끊김, 리뷰 H1)
+if ! { has_bb && stock_ap_on; }; then $BB ifconfig wlan0 0.0.0.0 2>/dev/null; fi
 # 업데이트 중이면(NEMESIS가 새 버전을 staging에 풀어 두고 예전 것의 preuninstall을 부름) Wi-Fi 설정과
 # 백업은 그대로 두고 조용히 끝낸다. HMG-API의 preuninstall과 같은 판단: 부른 명령이 uninstall이 아니고,
 # staging에 우리 패키지가 있을 때만 (중단된 설치가 남긴 staging 때문에 삭제가 무시되지 않게)
