@@ -27,3 +27,18 @@ Korea Projection은 GNU AGPL-3.0입니다(`LICENSE`). 아래는 다른 프로젝
   - HUD 빈 목록, 앞쪽 회전 아이콘 47~50
   - 안내 상태 주기 재전송(refresh)과 HUD 목록 재전송
 - 옮긴 부분은 소스 주석에 "from HMG-Seogaemo"로 표시했습니다.
+
+## BusyBox (GPL-2.0)
+
+- https://busybox.net
+- 1.7.0부터 릴리스 패키지(`korea.projection-*.zip`, USB 묶음 안의 `packages/korea.projection.zip`)에 `bin/busybox`가 들어 있습니다. 1.6.x 시험판에도 들어 있었고, 1.5.6에는 없습니다.
+  - busybox가 없는 내비(K3·K8 등 tcc803x)에서 Korea Projection 스크립트를 돌리려고 함께 넣었습니다. 내비에 `/system/bin/busybox`가 있으면 그것을 쓰고, 이 파일은 쓰지 않습니다.
+- BusyBox는 Korea Projection과 따로 동작하는 프로그램이고, AGPL-3.0이 아니라 **GNU GPL 2.0**으로 배포됩니다. 저희는 이 파일을 고치지 않았습니다.
+- 파일: BusyBox v1.36.1, Alpine Linux 3.20 `busybox-static-1.36.1-r31` 패키지의 `/bin/busybox.static`(ARMv7 정적 링크, 877,900바이트)
+  - SHA-256 `3d31efecd4d09625a5d04597ad857f3475d35e6d63a3365912a7edd4c60770a5`
+  - Alpine 서명을 확인하는 `apk add busybox-static`(Docker `alpine:3.20`, linux/arm/v7)으로 받았습니다.
+- 대응 소스
+  - BusyBox 1.36.1: https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+  - Alpine 빌드 설정·패치(`APKBUILD`, 설정 파일, 패치): https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.20-stable/main/busybox
+- 라이선스 원문: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+- 소스를 받기 어려우면 이슈로 알려 주세요. 위 소스를 직접 보내 드립니다.
