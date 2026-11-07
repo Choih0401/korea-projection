@@ -33,6 +33,8 @@ final class Report {
     String get(String k) { String s = v.get(k); return s == null ? "" : s; }
     boolean yes(String k) { return "yes".equals(v.get(k)); }
     boolean empty() { return v.isEmpty(); }
+    /** 한국 차를 지원하지 않는 다른 무선 모드가 있고, 그 모드로 카플레이가 연결돼 있지 않음 */
+    boolean foreign() { return yes("mod_foreign") && (get("cp_conn").isEmpty() || "0".equals(get("cp_conn"))); }
 
     /**
      * busybox가 없는 내비(K3·K8, tcc803x)인가. 1.5.5부터 status.sh가 이런 내비에서는 짧은 상태 파일
@@ -60,6 +62,9 @@ final class Report {
         if (hmgapiVer().isEmpty()) return "HMG-API가 없습니다. HMG-API " + MIN_HMGAPI + " 이상을 설치해 주세요.";
         if (older(hmgapiVer(), MIN_HMGAPI) != 0)
             return "지원하지 않는 HMG-API 버전입니다. " + MIN_HMGAPI + " 이상으로 업데이트해 주세요.";
+        // 1.6.1: 차에 있는 무선 모드가 한국 차를 지원하지 않는 다른 판(서비스는 덮어쓰지 않음). 토스트 대신 여기서 알린다.
+        // 그 모드로 이미 카플레이가 연결돼 있으면 안내하지 않는다(판단은 mod.json의 region만 보므로).
+        if (foreign()) return "차에 있는 HMG-API 무선 모드가 한국 차용이 아닙니다. HMG-API 앱에서 그 모드를 지우고 적용한 뒤 재부팅해 주세요.";
         if ("no".equals(get("mod"))) return "HMG-API 무선 모드가 없습니다. HMG-API 앱에서 설치해 주세요.";
         if ("no".equals(get("mod_on")))
             return "HMG-API 무선 모드가 꺼져 있습니다. HMG-API 앱에서 켜고 Apply changes 후 다시 시작해 주세요.";
@@ -81,6 +86,7 @@ final class Report {
         if (!yes("tested")) return 1;
         if (!yes("feat_carplay")) return 2;
         if (hmgapiVer().isEmpty() || older(hmgapiVer(), MIN_HMGAPI) != 0) return 2;
+        if (foreign()) return 2;
         if ("no".equals(get("mod")) || "no".equals(get("mod_on")) || "off".equals(get("bridge"))) return 2;
         // 훅 기록은 지난 부팅 것일 수 있어 노랑
         if ("off".equals(get("hooks"))) return 1;
@@ -211,6 +217,7 @@ final class Report {
 
     /** 무선 모드 칸: 없음 / 꺼짐 / 켜짐(무선 카플레이 설정 꺼짐) / 켜짐. 예전 상태 파일(mod만 있음)도 읽는다 */
     private String modCell() {
+        if (yes("mod_foreign")) return "한국 차용 아님 (지워야 함)";
         if ("no".equals(get("mod"))) return "없음 (필요)";
         if ("no".equals(get("mod_on"))) return "꺼짐 (켜야 함)";
         if ("off".equals(get("bridge"))) return "켜짐, Wireless CarPlay 설정 꺼짐";
@@ -278,6 +285,8 @@ final class Report {
         List<String> lines = new ArrayList<String>();
         lines.add("(QR summary)");
         for (String k : keys) if (v.containsKey(k)) lines.add(k + ": " + v.get(k));
+        // mod_foreign은 yes일 때만(링크 길이를 아낀다), 앞쪽에 넣는다
+        if (yes("mod_foreign")) lines.add(1, "mod_foreign: yes");
         String url = build(lines);
         while (url.length() > MAX_URL && lines.size() > 2) {
             lines.remove(lines.size() - 1);

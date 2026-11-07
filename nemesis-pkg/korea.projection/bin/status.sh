@@ -4,7 +4,7 @@
 # 리포트에는 이름, 버전, 예/아니요, 개수만 넣는다. SSID, 비밀번호, 휴대폰 이름, MAC, IP는
 # 넣지 않는다. 차 주인이 읽어 본 뒤 첨부한다.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-BB=${BB:-/system/bin/busybox}
+# busybox는 hotspot.sh가 고른다(내비의 것. 함께 넣은 busybox는 1.6.x 알파에만 있었다)
 APP=${APP:-/data/nemesis/apps/korea.projection}
 HOTSPOT_LIB=1 . $APP/svc/hotspot.sh
 ISSUES=https://github.com/StopDragon/korea-projection/issues/new?template=car-report.yml
@@ -142,6 +142,7 @@ report() {
   echo "- HMG-API:" $($BB grep -E '^(version|build) ' /data/hmgapi/installed.txt 2>/dev/null)
   echo "- wireless.projection 설치: $(yn [ -d /data/nemesis/apps/wireless.projection ])"
   echo "- HMG-API 무선 모드: 설치 $(mod_state) / 켜짐 $(mod_on_state) / 무선 카플레이 설정(bridge) $(bridge_state)"
+  mod_foreign && echo "  - 이 모드는 한국 차용이 아닙니다(Korea Projection이 넣은 것 아님). HMG-API 앱에서 지우고 적용·재부팅하면 한국 차용 모드 설치를 시도합니다"
   echo "- HMG-API 훅(마지막 부팅 기록): $(hooks_state)"
   echo
   echo "## 무선 기능 (pm list features)"
@@ -164,7 +165,7 @@ report() {
   parse_conf $SRC
   echo "- softap.conf: $(yn [ -s $SRC ]), 찾은 문자열 ${NS:-0}개, 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   echo "- 우리 hostapd: $(yn running "hostapd $CONF"), 우리 DHCP: $(yn running "$DNSMASQ")"
-  echo "- 다른 hostapd (순정 핫스팟): $(yn sh -c "$BB ps | $BB grep -v grep | $BB grep -v '$CONF' | $BB grep -q hostapd")"
+  echo "- 다른 hostapd (순정 핫스팟): $(yn stock_ap_on)"
   echo "- wpa_supplicant: $(yn running wpa_supplicant)"
   echo "- 지금 카플레이 연결 수: $($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
   echo
@@ -187,9 +188,16 @@ report() {
   elif [ -f $_fx ]; then set -- $($BB md5sum < $_fx); echo "featurexml.cfg $1 (모드가 바꿨을 수 있음)"; else echo "featurexml.cfg 없음"; fi
   echo '```'
   echo
+  L=/data/nemesis/logs/korea.projection/ap.log
+  # 1.5.6: 5GHz 연결이 얼마나 유지되는지 보려고 Wi-Fi·카플레이 연결 기록만 따로 모아 보인다(기기 주소 없음)
+  echo "## Wi-Fi·카플레이 연결 기록 (ap.log에서, 마지막 40줄)"
+  echo "- 지금 핫스팟 채널: $($BB awk -F= '$1 == "channel" { c = $2 } $1 == "hw_mode" { m = $2 } END { print (c == "" ? "알 수 없음" : c " (hw_mode=" m ")") }' $CONF 2>/dev/null || echo 알 수 없음) (설정 파일 값, 실제 채널은 아래 'AP 채널' 줄)"
+  echo '```'
+  [ -f $L ] && $BB grep -E 'Wi-Fi: |카플레이 연결 [0-9]|hostapd 시작' $L 2>/dev/null | $BB awk '{ l[NR % 40] = $0 } END { s = NR > 40 ? NR - 39 : 1; for (i = s; i <= NR; i++) print l[i % 40] }'
+  echo '```'
+  echo
   echo "## 서비스 로그 (ap.log 마지막 20줄)"
   echo '```'
-  L=/data/nemesis/logs/korea.projection/ap.log
   [ -f $L ] && { $BB tail -n 20 $L 2>/dev/null || cat $L; }
   echo '```'
   echo
@@ -237,6 +245,7 @@ status_kv() {
   echo "nemesis=$(nemesis version 2>/dev/null)"
   echo "wp=$(yesno [ -d /data/nemesis/apps/wireless.projection ])"
   echo "mod=$(mod_state)"
+  echo "mod_foreign=$(yesno mod_foreign)"
   echo "mod_on=$(mod_on_state)"
   echo "bridge=$(bridge_state)"
   _hk=$(hooks_state)
@@ -251,7 +260,7 @@ status_kv() {
   echo "pass_len=${#S4}"
   echo "our_ap=$(yesno running "hostapd $CONF")"
   echo "our_dhcp=$(yesno running "$DNSMASQ")"
-  echo "other_ap=$(yesno sh -c "$BB ps | $BB grep -v grep | $BB grep -v '$CONF' | $BB grep -q hostapd")"
+  echo "other_ap=$(yesno stock_ap_on)"
   echo "wpa=$(yesno running wpa_supplicant)"
   echo "cp_conn=$($BB netstat -tn 2>/dev/null | $BB grep -c "$AP_IP:7000")"
   echo "made=$(date '+%Y-%m-%d %H:%M')"
@@ -281,7 +290,7 @@ done
 if [ $WAITED = 0 ] && $BB grep -q '^state=run$' $PROG 2>/dev/null; then
   _wp=$(cat $W/wait.pid 2>/dev/null)
   if [ -z "$_wp" ] || [ ! -d /proc/$_wp ] || ! $BB grep -q status.sh /proc/$_wp/cmdline 2>/dev/null; then
-    $BB setsid sh $APP/bin/status.sh --wait </dev/null >/dev/null 2>&1 &
+    BB=$BB $BB setsid sh $APP/bin/status.sh --wait </dev/null >/dev/null 2>&1 &
     echo $! > $W/wait.pid
   fi
 fi
@@ -300,7 +309,7 @@ _need=0
 car_in "$(getprop ro.build.product)" "$CARS_OK" || _need=1
 _hk=$(hooks_state); [ "${_hk%% *}" = on ] || _need=1
 if [ $_need = 1 ] && command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then
-  W=$W RDIR=$RDIR $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
+  BB=$BB W=$W RDIR=$RDIR $BB setsid sh $APP/bin/carreport.sh </dev/null >/dev/null 2>&1 &
   m="Korea Projection: 제보 자료를 USB의 $RDIR 폴더에 저장하는 중입니다(약 1분). '이제 USB를 빼셔도 됩니다'가 뜰 때까지 꽂아 두세요."
 fi
 echo "$m"

@@ -10,7 +10,11 @@
 #   (USB를 뺀 빈 마운트 폴더에 써도 그 줄이 나온다: Report.java).
 # Car Report에는 HMG-API가 차종 수준 정보만 넣는다(VIN·전화번호·계정 없음, 휴대폰 주소는 지움: Report.java).
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-BB=${BB:-/system/bin/busybox}
+# busybox: status.sh가 고른 것을 넘겨받는다. 없으면 hotspot.sh와 같은 규칙(내비의 것, 없으면 패키지에 함께 넣은 것)
+if [ -z "$BB" ]; then
+  BB=/system/bin/busybox
+  [ -x $BB ] || BB=${APP:-/data/nemesis/apps/korea.projection}/bin/busybox
+fi
 W=${W:-/data/local/tmp/korea.projection}
 BOOT_ID=${BOOT_ID:-/proc/sys/kernel/random/boot_id}
 MOUNTS=${MOUNTS:-/proc/mounts}

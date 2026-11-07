@@ -159,6 +159,30 @@ mkdir -p $T/sa; echo "12345 boot" > $T/sa/fix.pid
 check "stop_ap(시작 때)는 fix.pid를 남김" '[ -f $T/sa/fix.pid ]'
 (PATH=$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$T/sa sh -c '. '$T'/app/svc/hotspot.sh; stop_all') >/dev/null 2>&1
 check "stop_all(끝낼 때)는 fix.pid를 정리" '[ ! -f $T/sa/fix.pid ]'
+# 1.5.6: 5GHz 149번 설정, Wi-Fi 연결 기록(커널 로그), 카플레이 연결 수 변화
+WE=$T/we; mkdir -p $WE/bin $WE/w; echo boot-A > $WE/bootid
+printf '#!/bin/sh\ncat %s/dmesg 2>/dev/null\n' $WE > $WE/bin/dmesg
+printf '#!/bin/sh\ncat %s/netstat 2>/dev/null\n' $WE > $WE/bin/netstat; chmod +x $WE/bin/*
+we() { (PATH=$WE/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB=$T/bin/bb W=$WE/w BOOT_ID=$WE/bootid CONF=$WE/hk.conf sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$WE'/bin:'$T'/bin:/usr/bin:/bin:/sbin; S2=SSIDx S4=PASS12345; '"$1"); }
+we write_conf
+check "1.5.6: 우리 hostapd는 5GHz 149번(hw_mode=a), 순정 netd와 같은 40MHz(HT40+), 2.4GHz 줄 없음" 'grep -qx "channel=149" $WE/hk.conf && grep -qx "hw_mode=a" $WE/hk.conf && grep -qx "ht_capab=\[HT40+\]\[SHORT-GI-20\]\[SHORT-GI-40\]" $WE/hk.conf && ! grep -q -e "^channel=6" -e "^hw_mode=g" $WE/hk.conf'
+printf '%s\n' "<4>[   21.17] Firmware version = wl0: version 9.92.1" "<6>[  632.555666] CFG80211-ERROR) wl_cfg80211_set_channel : netdev_ifidx(10), chan_type(1) target channel(149) channel_width(1000)" "<6>[  632.605213] CFG80211-ERROR) wl_notify_connect_status_ap : ** AP/GO Link up event **" "<4>[  701.367538] ETHER_TYPE_802_1X[wlan0] [RX] : M2 of 4way" "<4>[  701.372626] ETHER_TYPE_802_1X[wlan0] [RX] : M4 of 4way" "<6>[  773.805023] CFG80211-ERROR) wl_cfg80211_del_station : Disconnect STA : aa:bb:cc:dd:ee:ff scb_val.val 3" "no bracket line HANG" > $WE/dmesg
+we wifi_events > $WE/out1
+check "  Wi-Fi 연결 기록: 채널·AP 올라옴·연결(인증 끝)·끊김을 커널 시각과 함께, MAC은 없음" '[ "$(grep -c "Wi-Fi: " $WE/out1)" = 4 ] && grep -q "Wi-Fi: AP 채널 149 (커널 632초)" $WE/out1 && grep -q "Wi-Fi: AP 올라옴 (커널 632초)" $WE/out1 && grep -q "Wi-Fi: 기기 연결(Wi-Fi 인증 끝) (커널 701초)" $WE/out1 && grep -q "Wi-Fi: 기기 연결 끊김 (커널 773초)" $WE/out1 && ! grep -q -e "aa:bb" -e HANG $WE/out1'
+we wifi_events > $WE/out2
+check "  같은 커널 로그는 다시 남기지 않음(어디까지 남겼는지 기억)" '[ ! -s $WE/out2 ] && grep -q "^boot-A 773.805" $WE/w/ktime'
+echo "<6>[  800.1] CFG80211-ERROR) wl_cfg80211_del_station : Disconnect STA : aa:bb:cc:dd:ee:ff" >> $WE/dmesg; we wifi_events > $WE/out3
+check "  새로 생긴 줄만 남김" '[ "$(grep -c "Wi-Fi: " $WE/out3)" = 1 ] && grep -q "커널 800초" $WE/out3'
+echo boot-B > $WE/bootid; printf '%s\n' "<6>[   30.5] CFG80211-ERROR) wl_notify_connect_status_ap : ** AP/GO Link up event **" > $WE/dmesg; we wifi_events > $WE/out4
+check "  재부팅하면(부팅 id가 다름) 커널 시각이 작아도 처음부터 남김" 'grep -q "Wi-Fi: AP 올라옴 (커널 30초)" $WE/out4'
+echo boot-C > $WE/bootid; printf '%s\n' "<6>[    5.8] IPv6: ADDRCONF(NETDEV_CHANGE): ncm0: link becomes ready" "<6>[  300.0] CFG80211-ERROR) wl_cfg80211_del_station : Disconnect STA : ff:ff:ff:ff:ff:ff scb_val.val 3" "<4>[  301.0] dhd_os_send_hang: HANG event sent" > $WE/dmesg; we wifi_events > $WE/out5
+check "  유선 카플레이(NETDEV_CHANGE)는 HANG으로 세지 않고, hostapd 시작 때 모두 비우는 끊김(ff:ff…)도 세지 않음, 진짜 HANG은 남김" '! grep -q "기기 연결 끊김" $WE/out5 && [ "$(grep -c "HANG" $WE/out5)" = 1 ] && grep -q "Wi-Fi 칩 응답 없음(HANG) (커널 301초)" $WE/out5'
+: > $WE/bootid; printf '%s\n' "<6>[  400.0] ** AP/GO Link up event **" > $WE/dmesg; we wifi_events > $WE/out6; we wifi_events > $WE/out7
+check "  부팅 id를 못 읽어도 같은 줄을 30초마다 다시 남기지 않음" '[ "$(grep -c "AP 올라옴" $WE/out6)" = 1 ] && [ ! -s $WE/out7 ]'
+check "  디버그 로그는 태그와 상관없이 Wi-Fi 이름·비밀번호가 나올 수 있는 줄을 버림, 설치 때 예전 판의 busybox를 지움" 'grep -q "grep -v -i -E .ssid|psk \*\[=:\]|passphrase|password|bssid|key=." $T/app/svc/hotspot.sh && for l in "I/GPM ( 1): wifi ssid HomeNet" "I/GPM ( 1): psk=Secret1" "I/GPM ( 1): PSK : Secret2" "I/GPM ( 1): passphrase x"; do echo "$l" | grep -v -i -E "ssid|psk *[=:]|passphrase|password|bssid|key=" | grep -q . && exit 1; done; echo "I/Iap2Service ( 1): Wifi Access Auth Type :  WPA2_PSK" | grep -v -i -E "ssid|psk *[=:]|passphrase|password|bssid|key=" | grep -q WPA2_PSK && grep -q "^rm -f /data/nemesis/apps/korea.projection/bin/busybox" $T/app/scripts/post.sh && [ "$(grep -n "^rm -f /data/nemesis/apps/korea.projection/bin/busybox" $T/app/scripts/post.sh | cut -d: -f1)" -lt "$(grep -n "^HOTSPOT_LIB=1 \\." $T/app/scripts/post.sh | cut -d: -f1)" ]'
+rm -f $WE/netstat; we cp_watch > $WE/c1; printf '%s\n' "tcp 0 0 192.168.43.1:7000 192.168.43.23:52000 ESTABLISHED" "tcp 0 0 192.168.43.1:7000 192.168.43.23:49000 TIME_WAIT" > $WE/netstat; we cp_watch > $WE/c2; we cp_watch > $WE/c3; : > $WE/netstat; we cp_watch > $WE/c4
+check "  카플레이 연결 수(ESTABLISHED만)가 바뀔 때만 남김: 0→1, 같으면 없음, 1→0" '[ ! -s $WE/c1 ] && grep -q "카플레이 연결 0 → 1" $WE/c2 && [ ! -s $WE/c3 ] && grep -q "카플레이 연결 1 → 0" $WE/c4'
+rm -rf $WE
 
 # --- 1f. 1.5 자동 설정: 무선 모드와 니로 지도 (확인된 차에서만, 차주 선택은 덮어쓰지 않음) ---
 X=$T/as; mkdir -p $X/bin
@@ -212,8 +236,36 @@ asreset; rm -f $X/prog; asp > $X/out
 check "진행 기록: 무선 모드를 설치·적용하면 100% 재부팅 필요" 'grep -qx "pct=100" $X/prog && grep -qx "state=reboot" $X/prog && grep -q "^stage=무선 카플레이 설정을 마쳤습니다" $X/prog'
 asreset; rm -f $X/prog; touch $X/inst_fail; asp > $X/out; rm -f $X/inst_fail
 check "  설치에 실패하면 100% 실패, 사유는 그 안내 문구" 'grep -qx "state=fail" $X/prog && grep -q "^stage=HMG-API 무선 모드를 설치하지 못했습니다" $X/prog'
-asreset; rm -f $X/prog; mkdir -p $X/hd/maps/kia/niro/kor/260902; echo '{}' > $X/hd/maps/kia/niro/kor/260902/car.json; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out
-check "  무선 모드가 있지만 적용되지 않았으면 그 사유(앱에서 켜고 적용)로 실패" 'grep -qx "state=fail" $X/prog && grep -q "^stage=HMG-API 무선 모드가 있지만 꺼져 있거나 적용되지 않았습니다" $X/prog'
+# 1.6.1: 차에 우리 것이 아닌, 한국 차를 지원하지 않는 무선 모드(HMG-API 기본 2.1.0, #25 팰리세이드)가 있으면 덮어쓰지 않고 안내
+FMJ='{"id": "wireless-carplay-aa", "version": "2.1.0", "system": [{"model": ["CVEV", "NEEV", "NEEV23"], "region": "USA"}, {"model": ["CVEV", "NEEV"], "region": "CAN"}]}'
+asreset; rm -f $X/prog; mkdir -p $X/hd/mods/wireless-carplay-aa; echo "$FMJ" > $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out
+check "1.6.1: 한국 차를 지원하지 않는 다른 무선 모드가 있으면 설치·적용하지 않고 덮어쓰지 않음" '! grep -q "engine install" $X/calls 2>/dev/null && ! grep -q "engine apply" $X/calls 2>/dev/null && [ "$(cat $X/hd/mods/wireless-carplay-aa/mod.json)" = "$FMJ" ]'
+check "  토스트는 띄우지 않고(소유자 결정) 진행 화면은 그 안내로 실패, 표시 기록 파일 없음" '[ ! -f $T/toast ] && grep -qx "state=fail" $X/prog && grep -q "^stage=차에 있는 HMG-API 무선 모드가 한국 차용이 아닙니다" $X/prog && [ ! -f $X/bk/mod.foreign.told ]'
+rm -f $T/toast $X/prog; asp > $X/out
+check "  두 번째 부팅에도 토스트 없이 진행 화면 안내만" '[ ! -f $T/toast ] && grep -q "^stage=차에 있는 HMG-API 무선 모드가 한국 차용이 아닙니다" $X/prog'
+mf() { (HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w BK=$X/bk HMGDATA=$X/hd sh -c '. '$T'/app/svc/hotspot.sh; mod_foreign'); }
+: > $X/bk/mod.ours
+check "  우리가 넣은 모드(mod.ours)는 다른 판으로 보지 않음" '! mf'
+rm -f $X/bk/mod.ours; printf '{"system":[{"region":"KOR","features":["hmgapi.wifi"]}]}\n' > $X/hd/mods/wireless-carplay-aa/mod.json
+check "  한국 차 항목(\"region\":\"KOR\", 공백 없이)이 있으면 다른 판으로 보지 않음" '! mf'
+unzip -p $T/app/hmgapi/wireless-carplay-aa.zip mod.json > $X/hd/mods/wireless-carplay-aa/mod.json
+check "  패키지에 든 우리 모드의 mod.json은 다른 판으로 보지 않음" '! mf'
+rm -rf $X/hd/mods
+check "  모드가 없으면 아님" '! mf'
+mkdir -p $X/hd/mods/wireless-carplay-aa
+printf '{\n\t"system": [{\n\t\t"region":\t[ "USA", "KOR" ]\n\t}]\n}\n' > $X/hd/mods/wireless-carplay-aa/mod.json
+check "  한국 차 항목이 배열·탭 형식이어도 다른 판으로 보지 않음" '! mf'
+: > $X/hd/mods/wireless-carplay-aa/mod.json
+check "  빈 mod.json은 다른 판으로 보지 않음(판단 불가)" '! mf'
+rm -rf $X/hd/mods
+# 모드가 없으면 남은 기록(mod.ours)을 지움: 나중에 넣은 다른 판을 우리 것으로 보지 않게. mod.tried는 남김
+asreset; : > $X/bk/mod.ours; : > $X/bk/mod.tried; as > $X/out
+check "  모드가 없으면 남은 mod.ours를 지우고 mod.tried는 남김(다시 설치 안 함)" '[ ! -f $X/bk/mod.ours ] && [ -f $X/bk/mod.tried ] && ! grep -q "engine install" $X/calls 2>/dev/null'
+# 차주가 다른 판을 지운 뒤 다음 부팅에는 우리 모드를 설치
+asreset; rm -f $X/prog; mkdir -p $X/hd/mods/wireless-carplay-aa; echo "$FMJ" > $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out; rm -rf $X/hd/mods; rm -f $T/toast; asp > $X/out
+check "  다른 판을 지운 뒤 다음 부팅에는 한국 차용 모드를 설치·적용" 'grep -q "engine install" $X/calls && grep -qx "hmgapid engine apply" $X/calls && [ -f $X/bk/mod.ours ]'
+asreset; rm -f $X/prog; mkdir -p $X/hd/maps/kia/niro/kor/260902; echo '{}' > $X/hd/maps/kia/niro/kor/260902/car.json; mkdir -p $X/hd/mods/wireless-carplay-aa; echo '{"system": [{"region": "KOR"}]}' > $X/hd/mods/wireless-carplay-aa/mod.json; asp > $X/out
+check "  무선 모드(한국 차 지원)가 있지만 적용되지 않았으면 그 사유(앱에서 켜고 적용)로 실패" 'grep -qx "state=fail" $X/prog && grep -q "^stage=HMG-API 무선 모드가 있지만 꺼져 있거나 적용되지 않았습니다" $X/prog'
 asreset; rm -f $X/prog; echo TESTX.KOR.0000.V001.001.250101 > $T/product; echo "  77 1010 hostapd /data/misc/wifi/hostapd.conf" > $T/ps; asp > $X/out; rm -f $T/product $T/ps
 check "  순정 핫스팟이 켜져 있어 건너뛰면 그 사유로 표시" 'grep -qx "state=fail" $X/prog && grep -q "^stage=순정 핫스팟이 켜져 있어" $X/prog'
 asreset; rm -f $X/prog; echo TESTX.USA.0000.V001.001.250101 > $T/product; asp > $X/out; rm -f $T/product
@@ -467,12 +519,14 @@ PU=$T/pu; mkdir -p $PU/bk
 sed -e "s#^BB=.*#BB=$T/bin/bb#" -e "s#^BK=.*#BK=$PU/bk#" -e "s#/data/nemesis/apps/korea.projection/svc/hotspot.sh#$T/app/svc/hotspot.sh; export PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin#" \
   -e "s#^export PATH=.*#export PATH=$X/bin:$T/bin:/usr/bin:/bin:/sbin#" -e "s#^STAGE=.*#STAGE=$PU/stage#" \
   -e "s#/data/local/tmp/korea-projection-status#$PU/status#g" $T/app/scripts/preun.sh > $PU/preun.sh
-pureset() { rm -rf $PU/bk $X/calls $T/toast $X/hd; mkdir -p $PU/bk $X/hd/mods/wireless-carplay-aa; echo '{}' > $X/hd/mods/wireless-carplay-aa/mod.json; }
+pureset() { rm -rf $PU/bk $X/calls $T/toast $X/hd; mkdir -p $PU/bk $X/hd/mods/wireless-carplay-aa; echo '{"system": [{"region": "KOR"}]}' > $X/hd/mods/wireless-carplay-aa/mod.json; }
 pu() { (HMGDATA=$X/hd W=$PU/w sh $PU/preun.sh) > $PU/out 2>&1; }
 pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/onebin/depehev_kr/featurexml.cfg (stock)" "setting  prop/persist.sys.iap2.wifi back to stock" > $X/plan; pu
 check "삭제: 우리가 설치한 모드는 remove → 계획이 되돌리기뿐 → 적용, 토스트에 알림" 'grep -qx "hmgapid engine remove wireless-carplay-aa" $X/calls && grep -qx "hmgapid engine apply" $X/calls && grep -q "무선 모드도 지웠습니다" $T/toast'
 pureset; pu
 check "  원래 있던 모드(mod.ours 없음)는 건드리지 않음" '! grep -q "engine remove" $X/calls && [ -f $X/hd/mods/wireless-carplay-aa/mod.json ]'
+pureset; : > $PU/bk/mod.ours; echo "$FMJ" > $X/hd/mods/wireless-carplay-aa/mod.json; pu
+check "  1.6.1: mod.ours가 남아 있어도 지금 모드가 한국 차 빌드가 아니면(차주가 넣은 기본판) 지우지 않음" '! grep -q "engine remove" $X/calls && [ "$(cat $X/hd/mods/wireless-carplay-aa/mod.json)" = "$FMJ" ]'
 pureset; : > $PU/bk/mod.ours; printf '%s\n' "restore  /system/x (stock)" "change   /system/app/Y.apk [other-mod] -> 1" > $X/plan; pu
 check "  계획에 다른 변경이 있으면 지우기만 하고 적용은 앱에서 하라고 안내" 'grep -q "engine remove" $X/calls && ! grep -qx "hmgapid engine apply" $X/calls && grep -q "HMG-API 앱에서 변경 사항을 적용" $T/toast'
 pureset; : > $PU/bk/mod.ours; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data; pu; rm -rf $PU/stage
@@ -480,6 +534,13 @@ check "  업데이트 중(staging에 새 버전)에는 모드를 지우지 않�
 pureset; echo "1000:1010 660" > $PU/bk/wpaconf.orig; mkdir -p $PU/wifi; echo x > $PU/wifi/c.conf; echo 0:0 > $PU/wifi/c.conf.owner; rm -f $T/calls
 cp $WF/bin/chown $X/bin/chown; (HMGDATA=$X/hd W=$PU/w WCONF=$PU/wifi/c.conf sh $PU/preun.sh) > $PU/out 2>&1; rm -f $X/bin/chown
 check "삭제: Wi-Fi 잠금을 원래 소유자로 되돌림" '[ "$(cat $PU/wifi/c.conf.owner)" = 1000:1010 ] && grep -q "Wi-Fi 잠금 되돌림" $PU/out'
+# 1.6.0: busybox 없는 내비에서 busybox를 함께 넣지 않은 버전(1.5.x)으로 바꾸면 업데이트 중에도 잠금을 되돌림
+pureset; echo "1000:1010 660" > $PU/bk/wpaconf.orig; echo 0:0 > $PU/wifi/c.conf.owner; mkdir -p $PU/stage; echo "id=korea.projection" > $PU/stage/NEMESIS.data
+cp $WF/bin/chown $X/bin/chown; (HMGDATA=$X/hd W=$PU/w WCONF=$PU/wifi/c.conf sh $PU/preun.sh) > $PU/out 2>&1
+check "  1.6.0: busybox 없는 버전으로 내릴 때(업데이트)는 잠금을 되돌리고 기록은 남김" '[ "$(cat $PU/wifi/c.conf.owner)" = 1000:1010 ] && grep -q "busybox 없는 버전으로 바꿈" $PU/out && [ -f $PU/bk/wpaconf.orig ]'
+echo 0:0 > $PU/wifi/c.conf.owner; mkdir -p $PU/stage/bin; : > $PU/stage/bin/busybox
+(HMGDATA=$X/hd W=$PU/w WCONF=$PU/wifi/c.conf sh $PU/preun.sh) > $PU/out 2>&1; rm -f $X/bin/chown; rm -rf $PU/stage
+check "    새 버전에 busybox가 있으면(보통 업데이트) 잠금을 그대로 둠" '[ "$(cat $PU/wifi/c.conf.owner)" = 0:0 ] && ! grep -q "잠금 되돌림" $PU/out'
 pureset; echo null > $PU/bk/wifi_on; rm -f $T/calls; pu
 check "삭제: 설치 전 Wi-Fi 값이 null(한 번도 안 켬)이면 Wi-Fi를 끔" 'grep -qx "svc wifi disable" $T/calls'
 pureset; echo 1 > $PU/bk/wifi_on; rm -f $T/calls; pu
@@ -608,7 +669,7 @@ printf '%s\n' "01-01 18:30:04.740 I/HMG-API (  148): hook map: mapped for Kia Ni
 HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
 R=$T/usb0/KoreaProjection-report/1-report.md
 G3=$T/usb0/KoreaProjection-report/3-log.txt
-check "상태 화면용 파일: 644, 키 25개" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 25 ]'
+check "상태 화면용 파일: 644, 키 26개(1.6.1 mod_foreign 추가)" '[ "$(stat -f %Lp $STF)" = 644 ] && [ "$(grep -c "=" $STF)" = 26 ] && grep -qx "mod_foreign=no" $STF'
 check "  HMG-API 무선 모드 파일이 없으면 mod=no, mod_on=no, bridge=on" 'grep -qx "mod=no" $STF && grep -qx "mod_on=no" $STF && grep -qx "bridge=on" $STF'
 HM=$T/hm; mkdir -p $HM/mod $HM/set; echo '{"id":"wireless-carplay-aa"}' > $HM/mod/mod.json
 st_m() { HMGMOD=$HM/mod HMGSET=$HM/set/w.json HMGLOG=$T/hl STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null; }
@@ -644,6 +705,16 @@ check "  휴대폰 이름이 들어가는 디버그 로그(cp.log)는 넣지 않
 check "3-log.txt에 Wi-Fi 로그 칸: Wi-Fi 서비스 줄과 연결 성공 줄(key handshake)은 남기고 MAC은 지움" 'grep -q "^== Wi-Fi 로그" $G3 && grep -q "WifiStateMachine.*SUP_DISCONNECTION" $G3 && grep -q "wlan0 xx:xx:xx:xx:xx:xx" $G3 && grep -q "pairwise key handshake completed" $G3'
 check "  SSID·비밀번호·기기 이름이 나올 수 있는 줄과 다른 태그는 버림" '! grep -q -i -e "MyHomeNet" -e "secret99" -e "Johns" -e "OtherApp.*wifi" $G3'
 
+# 1.5.6: 리포트에 Wi-Fi·카플레이 연결 기록과 지금 채널
+printf '%s\n' "11-07 17:00:00 hostapd 시작" "11-07 17:00:30 Wi-Fi: AP 채널 149 (커널 632초)" "11-07 17:01:00 Wi-Fi: 기기 연결(Wi-Fi 인증 끝) (커널 701초)" "11-07 17:01:00 카플레이 연결 0 → 1" "11-07 17:02:00 동작 중: 1 개 카플레이 연결" > $T/logs/ap.log
+printf 'interface=wlan0\nssid=SSID\\cX\nchannel=149\nhw_mode=a\nwpa_passphrase=PASS\\word99\n' > $T/hk.conf
+CONF=$T/hk.conf HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "1.5.6 리포트: Wi-Fi·카플레이 연결 기록 칸과 지금 채널(149, hw_mode=a), 다른 줄은 그 칸에 넣지 않음" 'grep -q "^## Wi-Fi·카플레이 연결 기록" $R && grep -q "지금 핫스팟 채널: 149 (hw_mode=a)" $R && grep -q "AP 채널 149 (커널 632초)" $R && grep -q "카플레이 연결 0 → 1" $R && [ "$(sed -n "/^## Wi-Fi·카플레이 연결 기록/,/^## 서비스 로그/p" $R | grep -c "동작 중")" = 0 ] && ! grep -q -e "SSID.cX" -e "word99" $R'
+seq 1 60 | sed "s/^/11-07 Wi-Fi: 기기 연결 끊김 (커널 /; s/$/초)/" > $T/logs/ap.log; CONF=$T/hk.conf HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+check "  연결 기록은 마지막 40줄만, 순서대로" '[ "$(sed -n "/^## Wi-Fi·카플레이 연결 기록/,/^## 서비스 로그/p" $R | grep -c "끊김")" = 40 ] && [ "$(sed -n "/^## Wi-Fi·카플레이 연결 기록/,/^## 서비스 로그/p" $R | grep "끊김" | head -1)" = "11-07 Wi-Fi: 기기 연결 끊김 (커널 21초)" ] && sed -n "/^## Wi-Fi·카플레이 연결 기록/,/^## 서비스 로그/p" $R | grep "끊김" | tail -1 | grep -q "커널 60초"'
+# 뒤의 검사가 보통 리포트(기본 설정 경로)를 보도록 다시 만든다
+HMGLOG=$T/hlm STATUS=$STF BB=$T/bin/bb APP=$T/app SRC=$T/softap.conf W=$T/w sh $T/st.sh >/dev/null
+rm -f $T/hk.conf
 rm -rf $T/hlm; rm -f $T/logs/ap.log
 check "리포트에 SSID·비밀번호·폰 IP 없음" '! grep -q -e "SSID.cX" -e "PASS" -e HotspotName -e 192.168.43.23 $R'
 check "우리 hostapd 인식" 'grep -q "우리 hostapd: 예" $R'
@@ -924,6 +995,79 @@ echo "x 1" > $NB/bk/map.bad; check "  시험 지원 차 지도 확인 실패 기
 check "서비스: 무선 모드 대기에 들어갈 때 설정 중이면 한 번 기록하고 재부팅하지 말라고 안내" 'grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "if setup_pending; then" && grep -A4 "대기: HMG-API 무선 모드가 설치" $T/app/svc/hotspot.sh | grep -q "setup.told"'
 check "그랜저IG 2.5: 시험 지원 목록, 지도, 패치 세트 연결" '(HOTSPOT_LIB=1 BB=$T/bin/bb W=$X/w sh -c ". $T/app/svc/hotspot.sh; car_in IGPE.KOR.0000.V039.001.260902 \"\$CARS_TRY\"") && grep -q "\"IGPE.KOR.\"" $T/app/hmgapi/maps/hyundai/grandeur-gasoline/kor/260902/car.json'
 
+# ---- 1.6.0: busybox 고르기(내비의 것, 없으면 패키지에 함께 넣은 busybox 1.36.1) ----
+BS=$T/bsel; mkdir -p $BS/sys $BS/own $BS/w
+printf '#!/bin/sh\nexec "$@"\n' > $BS/sys/busybox; chmod 755 $BS/sys/busybox
+printf '#!/bin/sh\nexec "$@"\n' > $BS/own/busybox; chmod 755 $BS/own/busybox
+# 이 PC에서 실행되지 않는 busybox(예: noexec /data에 놓인 것)
+printf '#!/bin/sh\nexit 126\n' > $BS/own/broken; chmod 755 $BS/own/broken
+bsel() { (env HOTSPOT_LIB=1 W=$BS/w "$@" sh -c '. '$T'/app/svc/hotspot.sh; echo "BB=$BB"; echo "OK=$BB_OK"; echo "PS=$PS"'); }
+printf '#!/bin/sh\n[ "$1" = true ] && { echo "true: applet not found" >&2; exit 127; }\nexec "$@"\n' > $BS/sys/notrue; chmod 755 $BS/sys/notrue
+bsel BB= BB_SYS=$BS/sys/notrue BB_OWN=$BS/own/busybox > $BS/out
+check "1.6.0: 내비 busybox는 실행 파일인지만 봄(true 명령이 없는 1.8.1이어도 그대로 씀, 확인된 차가 멈추지 않게)" 'grep -qx "BB=$BS/sys/notrue" $BS/out && grep -qx "OK=1" $BS/out'
+bsel BB= BB_SYS=$BS/sys/busybox BB_OWN=$BS/own/busybox > $BS/out
+check "  내비에 busybox가 있으면 그것을 쓰고 ps는 지금처럼(옵션 없음)" 'grep -qx "BB=$BS/sys/busybox" $BS/out && grep -qx "OK=1" $BS/out && grep -qx "PS=$BS/sys/busybox ps" $BS/out'
+bsel BB= BB_SYS=$BS/none BB_OWN=$BS/own/busybox > $BS/out
+check "  없으면 함께 넣은 busybox를 쓰고, ps는 상태 칸을 달라고 함(-o pid,stat,args)" 'grep -qx "BB=$BS/own/busybox" $BS/out && grep -qx "OK=1" $BS/out && grep -qx "PS=$BS/own/busybox ps -o pid,stat,args" $BS/out'
+chmod 644 $BS/own/busybox; bsel BB= BB_SYS=$BS/none BB_OWN=$BS/own/busybox > $BS/out
+check "  함께 넣은 busybox에 실행 권한이 없으면 755로 주고 씀" 'grep -qx "OK=1" $BS/out && [ "$(stat -f %Lp $BS/own/busybox)" = 755 ]'
+bsel BB= BB_SYS=$BS/none BB_OWN=$BS/own/broken > $BS/out
+check "  함께 넣은 busybox가 실행되지 않으면 쓸 수 없음(BB_OK=0 → busybox 없는 내비로 처리)" 'grep -qx "OK=0" $BS/out'
+bsel BB= BB_SYS=$BS/none BB_OWN=$BS/none > $BS/out
+check "  둘 다 없으면 쓸 수 없음" 'grep -qx "OK=0" $BS/out'
+bsel BB=$BS/sys/busybox BB_SYS=$BS/none BB_OWN=$BS/own/busybox > $BS/out
+check "  BB를 미리 정하면 그대로 씀(테스트·carreport 호출)" 'grep -qx "BB=$BS/sys/busybox" $BS/out && grep -qx "PS=$BS/sys/busybox ps" $BS/out'
+(PATH=$NB/bin:$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB= BB_SYS=$BS/none BB_OWN=$BS/own/broken W=$NB/w2 BK=$NB/bk2 sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$NB'/bin:'$T'/bin:/usr/bin:/bin:/sbin; wait() { exit 7; }; main') > $BS/main.out 2>&1; echo $? >> $BS/main.out
+check "  서비스: 쓸 수 있는 busybox가 없으면 지금처럼 로그만 남기고 대기" 'grep -q "busybox가 없음" $BS/main.out && [ "$(tail -1 $BS/main.out)" = 7 ]'
+# ps -o pid,stat,args 형식(ARM 컨테이너에서 1.36.1로 본 모양): 좀비는 STAT Z, 이름은 [hostapd]
+mv $T/ps $T/ps.keep 2>/dev/null
+psx() { (PATH=$T/bin:/usr/bin:/bin:/sbin HOTSPOT_LIB=1 BB= BB_SYS=$BS/none BB_OWN=$T/bin/bb W=$BS/w sh -c '. '$T'/app/svc/hotspot.sh; export PATH='$T'/bin:/usr/bin:/bin:/sbin; '"$1"); }
+printf '%s\n' "PID   STAT COMMAND" "  999997 Z    [hostapd]" "  999996 S    {busybox} grep hostapd" > $T/ps
+check "  함께 넣은 busybox: 좀비 hostapd는 도는 것으로 보지 않음(running, stock_ap_on)" '! psx "running hostapd" && ! psx stock_ap_on'
+printf '%s\n' "PID   STAT COMMAND" "  4321 S    hostapd /data/misc/wifi/hostapd-kp.conf" "  4322 S    dnsmasq --keep-in-foreground --no-resolv --no-poll --dhcp-authoritative --pid-file --interface=wlan0" "  4400 S    hostapd /data/misc/wifi/hostapd.conf" > $T/ps
+check "  우리 hostapd는 도는 것으로, 순정 hostapd는 순정 핫스팟으로 봄" 'psx "running \"hostapd \$CONF\"" && psx stock_ap_on'
+printf '#!/bin/sh\necho "kill $*" >> %s/kills\n' $BS > $BS/kill; chmod 755 $BS/kill; rm -f $BS/kills
+psx 'kill() { echo "kill $*" >> '$BS'/kills; }; stop_ours'
+check "  stop_ours는 우리 hostapd·dnsmasq(PID 첫 칸)만 멈춤" '[ "$(cat $BS/kills 2>/dev/null)" = "$(printf "kill 4321\nkill 4322")" ]'
+rm -f $T/ps; mv $T/ps.keep $T/ps 2>/dev/null
+# post.sh·preun.sh·status.sh는 BB를 정하지 않고 hotspot.sh가 고르게 한다
+check "  post.sh·preun.sh는 BB를 비워 두고 hotspot.sh를 ps보다 먼저 읽음" 'grep -qx "BB=" $PKG/scripts/post.sh && grep -qx "BB=" $PKG/scripts/preun.sh && [ "$(grep -n "hotspot.sh$" $PKG/scripts/post.sh | cut -d: -f1)" -lt "$(grep -n "\$PS" $PKG/scripts/post.sh | head -1 | cut -d: -f1)" ]'
+check "  ps는 모두 \$PS로 부름(\$BB ps 직접 호출 없음)" '! grep -n -F "\$BB ps" $PKG/svc/hotspot.sh $PKG/bin/status.sh $PKG/bin/carreport.sh $PKG/scripts/post.sh $PKG/scripts/preun.sh | grep -v "then PS="'
+check "  status.sh는 carreport.sh·--wait에 고른 BB를 넘김" '[ "$(grep -c "BB=\$BB .*setsid" $PKG/bin/status.sh)" = 2 ]'
+# 1.5.6: busybox를 함께 넣지 않는다(1.6.x에서 다시 넣는다). K3·K8은 1.5.5처럼 "지원 조사 중"으로 남는다.
+check "1.5.6: 패키지에 bin/busybox가 없음(함께 넣는 busybox는 1.6.x), vendor 사본은 그대로" '[ ! -e $PKG/bin/busybox ] && [ -x $B/vendor/busybox/busybox ] && grep -q "$(shasum -a 256 < $B/vendor/busybox/busybox | cut -c1-64)" $B/vendor/busybox/README.md'
+check "  vendor의 busybox는 ARM 32비트 정적 실행 파일(1.6.x 재개용)" 'file $B/vendor/busybox/busybox | grep -q "ELF 32-bit LSB executable, ARM.*statically linked"'
+bsel BB= BB_SYS=$BS/none BB_OWN=$T/app/bin/busybox > $BS/out
+check "  내비에 busybox가 없고 패키지에도 없으면 BB_OK=0(서비스는 '지원 조사 중'으로 대기)" 'grep -qx "OK=0" $BS/out'
+# 진짜 busybox 1.36.1(ARM)로 확인: Docker와 alpine:3.20 arm/v7 이미지가 이 PC에 있을 때만(없으면 건너뜀, 받지 않음)
+if command -v docker >/dev/null 2>&1 && docker image inspect --platform linux/arm/v7 alpine:3.20 >/dev/null 2>&1; then
+  cat > $BS/real.sh <<'E'
+B=/vb/busybox
+mkdir -p /x; echo 'while :; do sleep 1; done' > /x/hostapd
+$B sh /x/hostapd /data/misc/wifi/hostapd-kp.conf & hp=$!
+$B sh /x/hostapd /data/misc/wifi/hostapd.conf & sp=$!
+( $B sleep 0 & exec $B sleep 3 ) &
+$B sleep 1
+HOTSPOT_LIB=1 BB= BB_SYS=/nonexist BB_OWN=/vb/busybox APP=/app W=/tmp/w . /app/svc/hotspot.sh
+echo "OK=$BB_OK"; echo "PS=$PS"
+$PS | $B grep -q " Z " && echo zombie-seen
+running "hostapd $CONF" && echo ours-running
+stock_ap_on && echo stock-on
+stop_ours; $B sleep 1
+kill -0 $hp 2>/dev/null || echo ours-stopped
+kill -0 $sp 2>/dev/null && echo stock-alive
+kill $sp
+printf '\000\005hi\377' > /tmp/b; set -- $(for _t in $($B od -b -v /tmp/b); do [ ${#_t} -eq 3 ] && echo $_t; done); echo "od=$*"
+echo hi > /tmp/f; chmod 640 /tmp/f; echo "perm=$(f_perm /tmp/f) owner=$(f_owner /tmp/f)"
+echo "md5=$(echo hi | $B md5sum)"
+E
+  docker run --rm --pull never --platform linux/arm/v7 -v $T/app:/app:ro -v $B/vendor/busybox:/vb:ro -v $BS:/t:ro alpine:3.20 /vb/busybox sh /t/real.sh > $BS/real.out 2>&1
+  check "  진짜 busybox(ARM 컨테이너): 실행됨, ps -o로 좀비를 보고 우리·순정 hostapd를 구분, 우리 것만 멈춤" 'grep -qx "OK=1" $BS/real.out && grep -qx "PS=/vb/busybox ps -o pid,stat,args" $BS/real.out && grep -qx zombie-seen $BS/real.out && grep -qx ours-running $BS/real.out && grep -qx stock-on $BS/real.out && grep -qx ours-stopped $BS/real.out && grep -qx stock-alive $BS/real.out'
+  check "  진짜 busybox: od -b -v 바이트, f_perm·f_owner, md5sum 표준입력" 'grep -qx "od=000 005 150 151 377" $BS/real.out && grep -qx "perm=640 owner=0:0" $BS/real.out && grep -qx "md5=764efa883dda1e11db47671c4a3bbd9e  -" $BS/real.out'
+else
+  echo "skip 진짜 busybox 확인(Docker 또는 alpine:3.20 arm/v7 이미지 없음)"
+fi
+
 # 진단 USB 스크립트(kp-probe, kp-wifi-diag, kp-sys-restore)는 공개하지 않는다(차 기록·순정 파일이 필요하다).
 # 공개 저장소에는 이 파일들이 없으므로 이 구역은 건너뛴다(패키지 테스트는 위에서 모두 돈다).
 if [ -f $B/scripts/kp-probe.sh ] && [ -f $B/scripts/kp-wifi-diag.sh ] && [ -f $B/scripts/kp-sys-restore.sh ]; then
@@ -1068,6 +1212,195 @@ check "  지난 기록이 남아 있어도 옮긴 뒤 이어서 상태 사진을
 wdreset; mkdir -p $WD/d; echo EXP > $WD/d/step; printf 'z\n' > $WD/usb/kp-wifidiag-snap; : > $WD/usb/kp-wifidiag-reset; wdrun; rm -f $WD/usb/kp-wifidiag-reset $WD/usb/kp-wifidiag-snap
 check "  되돌리기 파일과 함께 있어도 사진은 읽기만(Wi-Fi 안 건드림)" '[ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-SNAP-z-* 2>/dev/null)" ]'
 rm -f $WD/bin/content
+# --- 5GHz 확인(읽기 전용, kp-wifidiag-band) ---
+# 순정 softap.conf 형식 3: 보안 있음(4), 5GHz 149, 2.4GHz 1, 2.4GHz 사용 안 함, vendorSpecific "", apMode 0
+python3 - $WD/softap-band.conf <<'E'
+import struct,sys
+u=lambda s:struct.pack('>H',len(s))+s.encode()
+open(sys.argv[1],'wb').write(struct.pack('>i',3)+u('HotspotName1')+u('CarPlayNet7')+struct.pack('>i',4)+u('PASS\\word99')+u('ConnPass1234')+struct.pack('>ii',149,1)+b'\x00'+u('')+struct.pack('>i',0))
+E
+# wl은 받은 인자를 적고, 읽기 결과처럼 답한다. chanspecs는 $WD/wlhang가 있으면 멈춘다(제한 시간 확인)
+cat > $WD/bin/wl <<E
+#!/bin/sh
+echo "\$*" >> $WD/wlcalls
+case "\$3" in
+  bands) echo "a b" ;;
+  country) echo "KR (KR/2) KOREA, REPUBLIC OF" ;;
+  chanspecs) [ -f $WD/wlhang ] && /bin/sleep 30; echo "36 (0xd024)"; echo "149 (0xd095)" ;;
+  ver) echo "wl0: Nov 2022 version 9.87.51.7 (r729845 CY) FWID 01-f3ce00e mac aa:bb:cc:dd:ee:01" ;;
+  cap) echo "ap sta wme 802.11d 802.11h rm cqa cac dualband ampdu amsdu radio_pwrsave btamp p2p proptxstatus mchan wds dwds csa wnm bsstrans mimo_ps ldpc vht-prop-rates dfsradar" ;;
+  *) echo 1 ;;
+esac
+E
+cat > $WD/bin/getprop <<E
+#!/bin/sh
+if [ \$# -eq 0 ]; then
+  echo "[wifi.info.channel]: [149]"; echo "[ro.wifi.country]: [KR]"; echo "[wifi.info.factory_pw]: [FactSecret9]"; echo "[wifi.info.factory_ssid]: [FactNet]"
+else exec $T/bin/getprop "\$@"; fi
+E
+printf '#!/bin/sh\necho "netd: hw_mode=%%s channel=%%d ieee80211ac=1 ht_capab=[HT40+]"\n' > $WD/sbin-netd; chmod +x $WD/bin/wl $WD/bin/getprop
+# 커널 로그: 4단 드라이버 버전(남아야 함), IP·MAC(가려야 함). logcat: 개방형 netd 명령의 SSID(버려야 함)
+mv $WD/bin/dmesg $WD/dmesg.orig; mv $WD/bin/logcat $WD/logcat.orig
+printf '#!/bin/sh\necho "[ 5.0] dhd_module_init: Driver version 1.579.77.41.22 firmware version 9.87.51.7"\necho "[ 6.0] dhd: wl_cfg80211 channel 6 peer 192.168.43.23 mac 11:22:33:44:55:66"\n' > $WD/bin/dmesg
+printf '#!/bin/sh\necho "11-07 03:00:00.000 D/NetdConnector( 563): SND -> {12 softap set wlan0 OpenNet5 broadcast 149 open}"\necho "11-07 03:00:01.000 D/WifiApConfigStore( 563): 5GHz channel is not valid"\n' > $WD/bin/logcat
+chmod +x $WD/bin/dmesg $WD/bin/logcat
+printf 'macaddr=aa:bb:cc:dd:ee:02\nccode=KR\nregrev=2\naa5g=3\nboardflags=0x10401001\n' > $WD/nvram.cal
+mkdir -p $WD/sysbin $WD/wifi; cp $WD/sbin-netd $WD/sysbin/netd; echo hostapd > $WD/sysbin/hostapd; printf 'clm' > $WD/clm.blob
+printf 'interface=wlan0\nssid=SecretNet\nchannel=149\nhw_mode=a\nieee80211n=1\nht_capab=[HT40+]\nwpa_passphrase=Secret123\n' > $WD/wifi/hostapd.conf
+printf 'network={\n ssid="HomeNet"\n psk="HomePass"\n}\n' > $WD/wifi/wpa_supplicant.conf
+bdrun() { (cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$T/app SRC=$WD/softap-band.conf MOD=$WD/sys/mod NET=$WD/sys/net APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime WIFIDIR=$WD/wifi SYSBIN=$WD/sysbin CLM=$WD/clm.blob NVRAM=$WD/nvram.cal LIM_SEC=${LIMS:-10} LIMSLEEP=/bin/sleep timeout 60 sh $WD/diag.sh) > $WD/out 2>&1; }
+bdreset() { wdreset; rm -rf $WD/wlcalls $WD/wlhang $WD/usb/kp-stock-private; mkdir -p $WD/d; echo EXP > $WD/d/step; : > $WD/usb/kp-wifidiag-band; }
+bdreset; LIMS=7 bdrun
+BD=$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null | head -1)
+check "5GHz 확인: 기록만 남기고 Wi-Fi·드라이버·단계는 그대로, 끝에 안내" '[ -n "$BD" ] && [ -s $BD/1-band.txt ] && [ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && [ ! -f $WD/d/wifi_on ] && grep -q "5GHz 확인 기록을 USB에 저장" $WD/toasts && [ -z "$(ls -d $WD/d/out-* 2>/dev/null)" ]'
+check "  지키는 쪽 sleep이 남지 않음(명령이 먼저 끝난 경우)" '! pgrep -f "/bin/sleep 7$" >/dev/null'
+check "  wl은 값 없는 읽기 명령만 부름(wlan0 지정)" '[ -s $WD/wlcalls ] && ! grep -v -x -E "\-i wlan0 (ver|revinfo|bands|band|country|chanspec|chanspecs -b [25] -w (20|40|80)|cap|ap|apsta|mbss|nmode|vhtmode|spect|dfs_status)" $WD/wlcalls'
+check "  칩·국가·5GHz 채널 목록이 기록에 남음" 'grep -q "KR (KR/2)" $BD/1-band.txt && grep -q "149 (0xd095)" $BD/1-band.txt && grep -q "dualband" $BD/1-band.txt && grep -q "^wl: " $BD/1-band.txt'
+check "  4단 펌웨어·드라이버 버전은 지워지지 않고, MAC·IP는 가림" 'grep -q "version 9.87.51.7" $BD/1-band.txt && grep -q "1.579.77.41.22" $BD/1-band.txt && ! grep -q -e "aa:bb:cc" -e "11:22:33" -e "192.168.43.23" $BD/1-band.txt'
+check "  nvram은 국가·대역 칸만(MAC 줄 없음), 드라이버 인자도 남김" 'grep -qx "ccode=KR" $BD/1-band.txt && grep -qx "aa5g=3" $BD/1-band.txt && ! grep -q -e macaddr -e "ee:02" $BD/1-band.txt && grep -q "param nvram_path=" $BD/1-band.txt'
+check "  netd 명령 기록(SSID가 든 softap set 줄)은 버림" '! grep -q -e OpenNet5 -e "SND ->" $BD/1-band.txt && grep -q "5GHz channel is not valid" $BD/1-band.txt'
+check "  softap.conf 숫자 칸: 5GHz 149, 2.4GHz 1, 2.4GHz 사용 0, 판정 5GHz 149번" 'grep -q "5GHz 채널 149, 2.4GHz 채널 1, 2.4GHz 사용 0, vendorSpecific 길이 0, apMode 0" $BD/1-band.txt && grep -q "판정: 순정 핫스팟을 켜면 5GHz 149번" $BD/1-band.txt'
+check "  hostapd 설정은 대역·채널 줄만(SSID·비밀번호 줄 없음), 접속용 설정 파일은 읽지 않음" 'grep -qx "channel=149" $BD/1-band.txt && grep -qx "hw_mode=a" $BD/1-band.txt && grep -qx "ht_capab=\[HT40+\]" $BD/1-band.txt && ! grep -r -q -e SecretNet -e Secret123 -e HomeNet -e HomePass $BD'
+check "  Wi-Fi 이름·비밀번호·공장 설정 비밀번호가 기록에 없음, 채널 속성은 남음" '! grep -r -q -e HotspotName1 -e CarPlayNet7 -e word99 -e ConnPass1234 -e FactSecret9 -e FactNet $BD && grep -q "wifi.info.channel" $BD/1-band.txt && grep -q "ro.wifi.country" $BD/1-band.txt'
+SP=$(ls -d $WD/usb/kp-stock-private/* 2>/dev/null | head -1)
+check "  netd 문자열·md5는 기록에, 순정 파일 사본은 제보 폴더 밖(kp-stock-private)에만" 'grep -q "ieee80211ac=1" $BD/1-band.txt && [ "$(grep -c "^md5 " $BD/1-band.txt)" = 2 ] && [ -f "$SP/netd" ] && [ -f "$SP/clm.blob" ] && [ -z "$(find $WD/usb/kp-wifidiag -name netd -o -name clm.blob)" ]'
+# softap.conf가 다른 형식이거나 어긋나면 숫자(비밀번호 바이트일 수 있음)를 내지 않는다
+sbcase() { python3 - $WD/softap-band.conf "$1" <<'E'
+import struct,sys
+u=lambda s:struct.pack('>H',len(s))+s.encode()
+c=sys.argv[2]
+if c=='open': d=struct.pack('>i',3)+u('HotspotName1')+u('CarPlayNet7')+struct.pack('>i',0)+struct.pack('>ii',36,6)+b'\x01'+u('')+struct.pack('>i',0)
+elif c=='v1': d=struct.pack('>i',1)+u('HotspotName1')+struct.pack('>i',4)+u('PASS\\word99')+b'\x00'*12
+elif c=='short': d=struct.pack('>i',3)+u('HotspotName1')+u('CarPlayNet7')+struct.pack('>i',4)+u('PASS\\word99')
+else: d=struct.pack('>i',3)+u('HotspotName1')+u('CarPlayNet7')+struct.pack('>i',4)+u('PASS\\word99')+u('ConnPass1234')+b'wxyzabcd\x05'
+open(sys.argv[1],'wb').write(d)
+E
+bdreset; bdrun; cat $WD/usb/kp-wifidiag/out-BAND-*/1-band.txt 2>/dev/null; }
+check "  softap.conf 보안 없음(0): 비밀번호 칸 없이 읽고 2.4GHz 6번 판정" 'sbcase open | grep -q "판정: 순정 핫스팟을 켜면 2.4GHz 6번"'
+check "  softap.conf 형식이 3이 아니면 숫자를 읽지 않음" 'o=$(sbcase v1); echo "$o" | grep -q "형식 다름(1" && ! echo "$o" | grep -q "5GHz 채널 "'
+check "  softap.conf가 잘렸으면 채널 칸이 없다고만 적음" 'sbcase short | grep -q "채널 칸이 없음"'
+check "  softap.conf 값이 범위 밖이면(칸이 어긋남) 숫자를 내지 않음" 'o=$(sbcase bad); echo "$o" | grep -q "예상 범위 밖" && ! echo "$o" | grep -q "5GHz 채널 "'
+python3 - $WD/softap-band.conf <<'E'
+import struct,sys
+u=lambda s:struct.pack('>H',len(s))+s.encode()
+open(sys.argv[1],'wb').write(struct.pack('>i',3)+u('HotspotName1')+u('CarPlayNet7')+struct.pack('>i',4)+u('PASS\\word99')+u('ConnPass1234')+struct.pack('>ii',149,1)+b'\x00'+u('')+struct.pack('>i',0))
+E
+bdreset; : > $WD/usb/kp-wifidiag-reset; : > $WD/usb/kp-wifidiag-ab; bdrun; rm -f $WD/usb/kp-wifidiag-reset $WD/usb/kp-wifidiag-ab
+check "  되돌리기·A/B 파일이 함께 있어도 읽기만(Wi-Fi·A/B 단계 안 건드림)" '[ ! -f $WD/calls ] && [ "$(cat $WD/d/step)" = EXP ] && [ ! -f $WD/d/abstep ] && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null)" ]'
+bdreset; touch $WD/wlhang; s0=$(date +%s); LIMS=1 bdrun; s1=$(date +%s)
+BD=$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null | head -1)
+check "  wl이 응답하지 않으면 한 번만 기다리고 남은 wl은 건너뛰어 끝냄" '[ -n "$BD" ] && grep -q "1초 안에 응답 없음" $BD/1-band.txt && grep -q "앞의 wl이 응답하지 않아 건너뜀" $BD/1-band.txt && grep -q "5GHz 채널 149" $BD/1-band.txt && [ $((s1 - s0)) -lt 15 ] && [ ! -f $WD/d/wl.dead ]'
+bdreset; rm -rf $WD/sys/net/wlan0; mkdir -p $WD/d/out-OBS-old; echo old > $WD/d/out-OBS-old/x.txt; bdrun
+check "  지난 기록이 남아 있으면 옮긴 뒤 이어서 기록, wlan0이 없어도 끝까지" '[ -f $WD/usb/kp-wifidiag/out-OBS-old/x.txt ] && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null)" ] && grep -r -q "wlan0: 없음" $WD/usb/kp-wifidiag/out-BAND-*'
+bdreset; rm -f $WD/bin/wl; printf 'x\n' > $WD/usb/kp-wifidiag-snap; bdrun; rm -f $WD/usb/kp-wifidiag-snap
+BD=$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null | head -1)
+check "  wl이 없으면 그 사실을 남기고 끝까지, 상태 사진 파일은 이번에 하지 않았다고 적음" 'grep -q "^wl: 없음" $BD/1-band.txt && grep -q "5GHz 채널 149" $BD/1-band.txt && grep -q "kp-wifidiag-snap 파일도 있었지만" $BD/1-band.txt && [ -z "$(ls -d $WD/usb/kp-wifidiag/out-SNAP-* 2>/dev/null)" ]'
+bdreset; : > $WD/mounts; bdrun
+check "  USB가 떨어져 있으면 기록을 헤드유닛에 남기고 안내" '[ -n "$(ls -d $WD/d/out-BAND-* 2>/dev/null)" ] && grep -q "기록을 USB에 옮기지 못했습니다" $WD/toasts'
+echo "/dev/block/sda1 $WD/usb vfat rw 0 0" > $WD/mounts; rm -f $WD/usb/kp-wifidiag-band $WD/toasts; wdrun
+check "  다음에 꽂으면 옮김" '[ -n "$(ls -d $WD/usb/kp-wifidiag/out-BAND-* 2>/dev/null)" ] && grep -q "지난번 기록을 USB로 옮겼습니다" $WD/toasts'
+rm -f $WD/usb/kp-wifidiag-band $WD/bin/wl $WD/bin/getprop $WD/wlcalls $WD/wlhang $WD/nvram.cal; rm -rf $WD/sysbin $WD/wifi $WD/usb/kp-stock-private
+mv $WD/dmesg.orig $WD/bin/dmesg; mv $WD/logcat.orig $WD/bin/logcat
+# --- 5GHz 시험 (kp-wifidiag-5g) ---
+# ps는 " #L"로 끝나는 줄을 살아 있는 프로세스일 때만 보인다(좀비도 뺀다: 헤드유닛 ps의 " Z " 거르기와 같음)
+mv $WD/bin/ps $WD/ps.stub.orig; mv $WD/bin/sleep $WD/sleep.stub.orig; mv $WD/bin/dmesg $WD/dmesg.orig5
+cat > $WD/bin/ps <<E
+#!/bin/sh
+while IFS= read -r l; do
+  case "\$l" in
+    *" #L") set -- \$l; st=\$(/bin/ps -o stat= -p \$1 2>/dev/null); case "\$st" in ""|Z*) ;; *) echo "\${l% #L}" ;; esac ;;
+    *) echo "\$l" ;;
+  esac
+done < $WD/ps
+E
+# sleep는 시계를 앞으로 돌리고, 뒤에서 뜬 가짜 hostapd가 기록을 쓸 틈을 조금 준다
+printf '#!/bin/sh\n/bin/sleep 0.3\nt=$(cat %s/uptime | cut -d. -f1); echo "$((t + ${1%%.*})).00 1.00" > %s/uptime\n' $WD $WD > $WD/bin/sleep
+printf '#!/bin/sh\ncat %s/dmesg.log 2>/dev/null\n' $WD > $WD/bin/dmesg
+printf '#!/bin/sh\necho "tcp 0 0 127.0.0.1:5037 127.0.0.1:40000 ESTABLISHED"\necho "tcp 0 0 192.168.43.1:7000 192.168.43.23:49000 TIME_WAIT"\n[ -f %s/cpold ] && echo "tcp 0 0 192.168.43.1:7000 192.168.43.30:51000 ESTABLISHED"\n[ -f %s/cpon ] && echo "tcp 0 0 192.168.43.1:7000 192.168.43.23:52000 ESTABLISHED"\nexit 0\n' $WD $WD > $WD/bin/netstat
+printf '#!/bin/sh\necho "ifconfig $*" >> %s/ifcalls\n' $WD > $WD/bin/ifconfig
+# 가짜 hostapd: 채널 6, 또는 h5ok에 "채널:국가"가 있으면 커널 로그에 채널·AP 줄을 남기고 계속 돈다. 아니면 바로 끝난다.
+# cp5가 있으면 5GHz에서 아이폰이 붙는다. pullusb가 있으면 5GHz로 뜬 뒤 USB가 빠진다.
+cat > $WD/bin/hostapd <<E
+#!/bin/sh
+c=\$1; ch=\$(sed -n 's/^channel=//p' \$c); cc=\$(sed -n 's/^country_code=//p' \$c)
+echo "\$ch:\$cc:\$(sed -n 's/^hw_mode=//p' \$c)" >> $WD/hcalls
+[ -f $WD/svcdup ] && [ "\$ch" != 6 ] && { rm -f $WD/svcdup; echo "11-07 16:00:00 hostapd 시작" >> $WD/ap.log; }
+[ -f $WD/wrap ] && { tail -n 1 $WD/dmesg.log > $WD/dmesg.t; mv $WD/dmesg.t $WD/dmesg.log; }
+if { [ "\$ch" = 6 ] && [ ! -f $WD/fail6 ]; } || grep -qx "\$ch:\$cc" $WD/h5ok 2>/dev/null; then
+  echo "[ 99.0] CFG80211-ERROR) wl_cfg80211_set_channel : netdev_ifidx(10), chan_type(1) target channel(\$ch) channel_width(1000)" >> $WD/dmesg.log
+  echo "[ 99.1] CFG80211-ERROR) wl_notify_connect_status_ap : ** AP/GO Link up event ** peer aa:bb:cc:dd:ee:09 192.168.43.23" >> $WD/dmesg.log
+  if [ "\$ch" = 6 ]; then rm -f $WD/cpon; else [ -f $WD/cp5 ] && : > $WD/cpon; [ -f $WD/pullusb ] && : > $WD/mounts; fi
+  echo "Using interface wlan0 with hwaddr aa:bb:cc:dd:ee:09 and ssid \"SSID\\\\cX\""
+  echo "wlan0: AP-ENABLED key PASS\\\\word99"
+  echo "  \$\$ root 1000 S hostapd \$c #L" >> $WD/ps
+  exec /bin/sleep 597
+fi
+echo "Line 3: Could not set channel for kernel driver"
+exit 1
+E
+chmod +x $WD/bin/ps $WD/bin/sleep $WD/bin/dmesg $WD/bin/netstat $WD/bin/ifconfig $WD/bin/hostapd
+HC=$WD/hconf
+printf 'interface=wlan0\ndriver=nl80211\nctrl_interface=/data/misc/wifi/hostapd\nssid=SSID\\cX\nchannel=6\nhw_mode=g\nieee80211n=1\nmax_num_sta=5\nwpa=2\nwpa_passphrase=PASS\\word99\n' > $WD/hconf.orig
+t5kill() { pkill -f "sleep 597" 2>/dev/null; /bin/sleep 0.3; }
+# $1=1: 우리 6번 hostapd가 돌고 있는 상태로 시작
+t5reset() {
+  t5kill; wdreset; rm -rf $WD/hcalls $WD/h5ok $WD/cp5 $WD/cpon $WD/cpold $WD/pullusb $WD/ifcalls $WD/svcdup $WD/fail6 $WD/wrap $WD/usb/kp-wifidiag-reset; : > $WD/ap.log
+  mkdir -p $WD/d; echo EXP > $WD/d/step; : > $WD/usb/kp-wifidiag-5g
+  cp $WD/hconf.orig $HC; chmod 660 $HC
+  echo "[ 21.1] Firmware version = wl0: version 9.92.1" > $WD/dmesg.log
+  echo "  1 root 1000 wpa_supplicant -iwlan0" > $WD/ps
+  if [ "${1:-1}" = 1 ]; then /bin/sleep 597 & echo "  $! root 1000 S hostapd $HC #L" >> $WD/ps; fi
+}
+t5run() { (cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$T/app SRC=$T/softap.conf MOD=$WD/sys/mod NET=$WD/sys/net APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime HCONF=$HC KMSG=$WD/dmesg.log T5_UP=4 T5_SEC=20 T5_TICK=5 LIM_SEC=3 LIMSLEEP=/bin/sleep timeout 120 sh $WD/diag.sh) > $WD/out 2>&1; }
+t5live() { $WD/bin/ps | grep -c "hostapd $HC"; }
+t5reset; echo "149:" > $WD/h5ok; : > $WD/cp5; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "5GHz 시험: 149번으로 띄워 카플레이 연결을 기록하고 6번으로 되돌림" '[ -n "$R5" ] && grep -q "판정: 5GHz 149번에서 카플레이 연결됨" $R5/1-5g.txt && [ "$(sed -n 1p $WD/hcalls)" = "149::a" ] && [ "$(sed -n "\$p" $WD/hcalls)" = "6::g" ] && [ "$(wc -l < $WD/hcalls | tr -d " ")" = 2 ]'
+check "  설정 파일은 원래 내용·권한 그대로, 우리 hostapd는 하나만 돎, 백업·출력은 헤드유닛에서 지움" 'cmp -s $HC $WD/hconf.orig && [ "$(stat -f %Lp $HC 2>/dev/null || stat -c %a $HC)" = 660 ] && [ "$(t5live)" = 1 ] && [ -z "$(ls $WD/d/h5-* 2>/dev/null)" ] && grep -q "2.4GHz 6번으로 다시 켜짐" $R5/1-5g.txt'
+check "  Wi-Fi 이름·비밀번호·MAC·IP가 기록에 없음, 채널 줄은 남음" '! grep -r -q -e "SSID.cX" -e "word99" -e "aa:bb:cc" -e "192.168.43.23" $WD/usb/kp-wifidiag && grep -q "target channel(149)" $R5/1-5g.txt && grep -q "바꾼 줄: channel=149 hw_mode=a ieee80211n=1" $R5/1-5g.txt'
+check "  단계·Wi-Fi 서비스는 그대로, 안내 토스트(시작·5GHz·연결·끝)" '[ "$(cat $WD/d/step)" = EXP ] && ! grep -q "^svc" $WD/calls 2>/dev/null && grep -q "5GHz 149번으로 바꿨습니다" $WD/toasts && grep -q "5GHz에서 카플레이가 연결됐습니다. 음악" $WD/toasts && grep -q "5GHz에서 카플레이가 연결됐습니다. USB를 빼셔도 됩니다" $WD/toasts'
+check "  연결 기록이 간격마다 남음, wl은 -i 있이·없이 한 번씩" '[ "$(grep -c -E "^[0-9]+ \| 1 \| 1$" $R5/1-5g.txt)" -ge 2 ] && grep -q -- "--- wl chanspec" $R5/1-5g.txt && grep -q -- "--- wl -i wlan0 chanspec" $R5/1-5g.txt'
+t5reset; echo "36:KR" > $WD/h5ok; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  149번이 안 되면 149번+KR, 36번+KR 순서로, 카플레이가 안 붙으면 그렇게 판정" '[ "$(tr "\n" " " < $WD/hcalls)" = "149::a 6::g 149:KR:a 6::g 36:KR:a 6::g " ] || [ "$(tr "\n" " " < $WD/hcalls)" = "149::a 149:KR:a 36:KR:a 6::g " ]; r=$?; [ $r = 0 ] && grep -q "판정: 5GHz 36번 AP는 올라왔지만" $R5/1-5g.txt && cmp -s $HC $WD/hconf.orig && [ "$(t5live)" = 1 ] && grep -q "켜졌지만 카플레이는 붙지 않았습니다. 내비를 한 번 재부팅" $WD/toasts && grep -q "국가(KR)를 넣어 시도했습니다" $R5/1-5g.txt'
+check "  실패한 시도는 hostapd 오류와 사유를 남김" 'grep -q "Could not set channel" $R5/1-5g.txt && grep -q "결과: 실패(hostapd가 꺼짐)" $R5/1-5g.txt && grep -q "country_code=KR" $R5/1-5g.txt'
+t5reset; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  5GHz가 모두 안 되면 6번으로 되돌리고 안내" 'grep -q "판정: 5GHz로 AP를 띄우지 못함" $R5/1-5g.txt && [ "$(sed -n "\$p" $WD/hcalls)" = "6::g" ] && cmp -s $HC $WD/hconf.orig && [ "$(t5live)" = 1 ] && grep -q "5GHz 핫스팟을 켜지 못했습니다" $WD/toasts'
+t5reset 0; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  우리 hostapd가 안 돌면 아무것도 바꾸지 않음" '[ ! -f $WD/hcalls ] && cmp -s $HC $WD/hconf.orig && grep -q "중단: 우리 핫스팟이 돌고 있지 않아" $R5/1-5g.txt && grep -q "시험하지 않았습니다" $WD/toasts'
+t5reset; sed -i.b 's/^channel=6/channel=11/' $HC; rm -f $HC.b; cp $HC $WD/hconf.11; t5run
+check "  설정 파일이 예상한 모양(6번·g)이 아니면 바꾸지 않음" '[ ! -f $WD/hcalls ] && cmp -s $HC $WD/hconf.11 && grep -r -q "예상한 모양" $WD/usb/kp-wifidiag'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/pullusb; t5run
+check "  기록 중 USB가 빠지면 바로 6번으로 되돌리고 기록은 헤드유닛에 남김" '[ "$(sed -n "\$p" $WD/hcalls)" = "6::g" ] && cmp -s $HC $WD/hconf.orig && [ "$(t5live)" = 1 ] && grep -q "USB가 빠져 기록을 멈춤" $WD/d/out-5G-*/1-5g.txt && grep -q "다음에 꽂으면 옮깁니다" $WD/toasts && [ -z "$(ls $WD/d/h5-* 2>/dev/null)" ]'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/usb/kp-wifidiag-reset; t5run
+check "  되돌리기 파일이 함께 있어도 단계는 그대로(5GHz 시험만)" '[ "$(cat $WD/d/step)" = EXP ] && ! grep -q "^svc" $WD/calls 2>/dev/null && [ -n "$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null)" ]'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/cpold; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  시험 전부터 있던 카플레이 연결·끊긴 연결은 5GHz 연결로 세지 않음" 'grep -q "판정: 5GHz 149번 AP는 올라왔지만" $R5/1-5g.txt && grep -q "카플레이 연결: 1" $R5/1-5g.txt && [ -z "$(ls $WD/d/cp0 $WD/d/cp1 2>/dev/null)" ]'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/cp5; : > $WD/svcdup; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  서비스의 30초 점검과 겹치면 모두 멈추고 다시 띄움(하나만 남김)" 'grep -q "서비스의 30초 점검과 겹쳐" $R5/1-5g.txt && grep -q "판정: 5GHz 149번에서 카플레이 연결됨" $R5/1-5g.txt && [ "$(t5live)" = 1 ] && cmp -s $HC $WD/hconf.orig'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/wrap; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  커널 로그 버퍼가 차서 표시 줄이 밀려도 채널 줄로 판정" 'grep -q "결과: 성공(5GHz 149번" $R5/1-5g.txt'
+t5reset; echo "149:" > $WD/h5ok; : > $WD/fail6; t5run
+R5=$(ls -d $WD/usb/kp-wifidiag/out-5G-* 2>/dev/null | head -1)
+check "  6번으로 다시 못 띄우면 재부팅을 안내(되돌렸다고 하지 않음)" 'cmp -s $HC $WD/hconf.orig && grep -q "hostapd: 꺼져 있음(내비 재부팅 권함)" $R5/1-5g.txt && grep -q "내비를 한 번 재부팅해 주세요" $WD/toasts && ! grep -q "다시 켜짐" $R5/1-5g.txt'
+# 강제로 끝나 5GHz 설정·백업이 남은 채 다시 꽂으면 먼저 되돌리고 백업을 지움
+t5reset 0; cp $WD/hconf.orig $WD/d/h5-orig.conf; sed 's/^channel=6/channel=149/; s/^hw_mode=g/hw_mode=a/' $WD/hconf.orig > $HC; echo secret > $WD/d/h5.log
+/bin/sleep 597 & echo "  $! root 1000 S hostapd $HC #L" >> $WD/ps; rm -f $WD/usb/kp-wifidiag-5g; : > $WD/usb/kp-wifidiag-band; t5run; rm -f $WD/usb/kp-wifidiag-band
+check "  지난 시험이 강제로 끝나 5GHz 설정이 남았으면 다시 꽂을 때 먼저 되돌리고 백업·출력을 지움" 'cmp -s $HC $WD/hconf.orig && [ "$(t5live)" = 0 ] && [ -z "$(ls $WD/d/h5-* 2>/dev/null)" ] && grep -q "지난 5GHz 시험 설정을 2.4GHz로 되돌렸습니다" $WD/toasts'
+# 도중에 끝나도(TERM) 되돌림: 연결 기록 중에 진단을 죽인다
+t5reset; echo "149:" > $WD/h5ok
+(cd $WD && BB=$T/bin/bb U=$WD/usb D=$WD/d APP=$T/app SRC=$T/softap.conf MOD=$WD/sys/mod NET=$WD/sys/net APLOG=$WD/ap.log HMGLOG=$WD/hl MOUNTS=$WD/mounts INITRC=$WD/data/ UPT=$WD/uptime HCONF=$HC KMSG=$WD/dmesg.log T5_UP=4 T5_SEC=600 T5_TICK=5 LIM_SEC=3 LIMSLEEP=/bin/sleep sh $WD/diag.sh > $WD/out 2>&1 & echo $! > $WD/t5.pid; wait) &
+_w=0; while ! grep -q "5GHz 149번으로 바꿨습니다" $WD/toasts 2>/dev/null && [ $_w -lt 60 ]; do /bin/sleep 0.5; _w=$((_w+1)); done
+/bin/sleep 1; kill $(cat $WD/d.lock/pid 2>/dev/null) 2>/dev/null; _w=0; while [ -d $WD/d.lock ] && [ $_w -lt 40 ]; do /bin/sleep 0.5; _w=$((_w+1)); done
+check "  기록 중에 진단이 멈추면(TERM) 바로 설정 파일을 되돌리고 5GHz hostapd를 멈춤(6번은 서비스가 띄움)" 'cmp -s $HC $WD/hconf.orig && [ "$(t5live)" = 0 ] && [ -z "$(ls $WD/d/h5-* 2>/dev/null)" ] && grep -r -q "멈춤: 설정 파일만 되돌리고" $WD/usb/kp-wifidiag $WD/d/out-5G-* 2>/dev/null'
+t5kill; rm -f $WD/cpold $WD/svcdup $WD/fail6 $WD/wrap $WD/usb/kp-wifidiag-5g $WD/bin/netstat $WD/bin/ifconfig $WD/bin/hostapd $WD/hcalls $WD/h5ok $WD/cp5 $WD/cpon $WD/pullusb $WD/ifcalls $WD/dmesg.log $HC $WD/hconf.orig $WD/hconf.11 $WD/t5.pid
+mv $WD/ps.stub.orig $WD/bin/ps; mv $WD/sleep.stub.orig $WD/bin/sleep; mv $WD/dmesg.orig5 $WD/bin/dmesg
+echo "  1 root 1000 wpa_supplicant -iwlan0" > $WD/ps
 # --- A/B 시험 (root 소유 Wi-Fi 설정 파일) ---
 # 이 PC에서는 다른 사용자로 소유자를 바꿀 수 없어, chown은 소유자를 옆 파일(<파일>.owner)에 적고 ls -ln은 그것을 보여 준다
 AB=$WD/ab; mkdir -p $AB

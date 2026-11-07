@@ -4,10 +4,11 @@
 # 같은 USB 버스에 있는 것으로 보임) 블루투스 카플레이가 재부팅 전까지 되지 않았다. 일반 Wi-Fi는 차를 껐다
 # 켜면 돌아온다(wifi_on이 켜져 있으므로). 설치 전에 Wi-Fi가 꺼져 있던 차만 다시 끈다.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-BB=/system/bin/busybox
+# busybox는 아래 hotspot.sh가 고른다(내비의 것. 함께 넣은 busybox는 1.6.x 알파에만 있었다)
+BB=
 BK=/data/nemesis/backup/korea.projection
 HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
-# busybox가 없는 내비(K3·K8)는 우리 hostapd를 켠 적이 없다: 오류 줄만 나오므로 건너뛴다
+# 쓸 수 있는 busybox가 없는 내비는 우리 hostapd를 켠 적이 없다: 오류 줄만 나오므로 건너뛴다
 has_bb && stop_all
 rm -f $CONF
 # Launch가 남긴 "설치 끝나면 다시 저장" 대기(status.sh --wait)도 멈추고, 진행 기록을 지운다
@@ -27,15 +28,19 @@ case "$(cat /proc/$PPID/cmdline 2>/dev/null)" in
   *)
     # busybox가 없는 내비도 있어(K3 #15) 셸 기본 grep을 쓴다
     if grep -q '^id=korea\.projection$' $STAGE/NEMESIS.data 2>/dev/null; then
+      # 1.6.0: busybox 없는 내비에서 busybox를 함께 넣지 않은 버전(1.5.x)으로 내리면, 그 버전은 Wi-Fi 잠금을
+      # 되돌리지 못한다(삭제 때 $BB chown이 실패). 아직 우리 busybox가 있는 지금 되돌린다(기록은 남김).
+      [ ! -x $BB_SYS ] && [ ! -f $STAGE/bin/busybox ] && has_bb && wifi_unlock && echo "Wi-Fi 잠금 되돌림(busybox 없는 버전으로 바꿈)"
       echo "korea.projection 업데이트: 이전 버전 정리"
       exit 0
     fi ;;
 esac
 remove_app
-# 1.5: 우리가 설치한 HMG-API 무선 모드만 정리한다(mod.ours). 원래 있던 모드와 지도는 그대로 둔다
+# 1.5: 우리가 설치한 HMG-API 무선 모드만 정리한다(mod.ours). 1.6.1: 지금 있는 모드가 한국 차 빌드(mod_kor)일 때만:
+# mod.ours가 오래된 기록이고 차주가 다른 판(HMG-API 기본판)을 넣었으면 그 모드는 지우지 않는다. 원래 있던 모드와 지도는 그대로 둔다
 # (지도는 HMG-API의 다른 모드도 쓴다). 계획이 그 모드의 되돌리기뿐일 때만 적용하고, 아니면 앱에서 적용하라고 안내한다.
 modmsg=""
-if [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && hmgapid ping >/dev/null 2>&1; then
+if [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && mod_kor && hmgapid ping >/dev/null 2>&1; then
   if hmgapid engine remove $MOD_ID > $BK/mod-remove.txt 2>&1; then
     bad=0
     hmgapid engine plan > $BK/plan.txt 2>&1 || bad=1
@@ -56,7 +61,7 @@ if [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && hmgapid ping 
     echo "무선 모드 지우기 실패"
     modmsg=" HMG-API 앱에서 무선 모드(Wireless CarPlay + Android Auto)를 지우고 적용해 주세요."
   fi
-elif [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ]; then
+elif [ -f $BK/mod.ours ] && [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && mod_kor; then
   # HMG-API 데몬이 응답하지 않으면 지울 수 없다. NEMESIS가 이 패키지의 백업 폴더($BK)를 지우므로 기록도 사라진다:
   # 차주에게 직접 지우라고 알린다.
   echo "HMG-API 데몬 응답 없음: 무선 모드를 지우지 못함"

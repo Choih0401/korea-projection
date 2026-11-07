@@ -51,6 +51,15 @@ public class ReportTest {
         Report odd = Report.parse(GOOD.replace("version 1.0.2 build", "version dev build"));
         check("숫자가 아닌 버전 → '버전 확인 안 됨', 빨강 (멈추지 않음)", odd.level() == 2 && row(odd, "HMG-API").contains("버전 확인 안 됨"));
         Report nomod = Report.parse(GOOD.replace("mod=yes\nmod_on=yes", "mod=no\nmod_on=no"));
+        // 1.6.1: 차에 맞지 않는 다른 무선 모드(HMG-API 기본판) → 토스트 대신 Launch 화면 맨 위에서 지우라고 안내
+        Report fm = Report.parse(GOOD.replace("mod=yes", "mod=yes\nmod_foreign=yes"));
+        check("다른 판 무선 모드 → 지우고 재부팅 안내, 빨강, 칸 '한국 차용 아님'", fm.verdict().startsWith("차에 있는 HMG-API 무선 모드가 한국 차용이 아닙니다")
+            && fm.level() == 2 && row(fm, "HMG-API 무선 모드").startsWith("한국 차용 아님") && fm.verdict().length() <= 80);
+        Report fmc = Report.parse(GOOD.replace("mod=yes", "mod=yes\nmod_foreign=yes").replace("cp_conn=0", "cp_conn=1"));
+        check("다른 판이어도 카플레이가 연결돼 있으면 빨강 안내 안 함", fmc.verdict().equals("무선 카플레이 연결됨") && fmc.level() == 0);
+        check("확인 안 된 차는 그 안내가 먼저", Report.parse(GOOD.replace("mod=yes", "mod=yes\nmod_foreign=yes").replace("tested=yes", "tested=no")).verdict().startsWith("확인되지 않은 차"));
+        check("QR 요약: mod_foreign은 yes일 때만", fm.issueUrl().contains("mod_foreign") && !Report.parse(GOOD.replace("mod=yes", "mod=yes\nmod_foreign=no")).issueUrl().contains("mod_foreign"));
+        check("mod_foreign=no면 그대로 '준비됨'", Report.parse(GOOD.replace("mod=yes", "mod=yes\nmod_foreign=no")).verdict().startsWith("무선 카플레이 준비됨"));
         check("무선 모드 없음 → 설치 안내, 빨강, '없음 (필요)'", nomod.verdict().startsWith("HMG-API 무선 모드가 없습니다") && nomod.level() == 2 && "없음 (필요)".equals(row(nomod, "HMG-API 무선 모드")));
         Report modoff = Report.parse(GOOD.replace("mod_on=yes", "mod_on=no"));
         check("무선 모드 꺼짐(11-06 시험 상태) → 켜기 안내, 빨강, '꺼짐 (켜야 함)'", modoff.verdict().startsWith("HMG-API 무선 모드가 꺼져") && modoff.level() == 2 && "꺼짐 (켜야 함)".equals(row(modoff, "HMG-API 무선 모드")));

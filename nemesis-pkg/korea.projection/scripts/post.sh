@@ -3,7 +3,11 @@
 # uninstall, and stop the stick script's access point (cp-drive.sh) if one is running, so only
 # this package's hostapd has wlan0. NEMESIS starts the service after this.
 export PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
-BB=/system/bin/busybox
+# busybox는 아래 hotspot.sh가 고른다(내비의 것만: 1.5.6은 busybox를 함께 넣지 않는다). 비워 두면 고른다.
+BB=
+# 1.6.x 알파 위에 덮어 설치했을 때 예전에 함께 넣은 busybox가 남아 있으면 지운다(남으면 K3·K8이 1.5.5처럼 대기하지 않고
+# 확인 안 된 경로를 탄다). 1.5.6 패키지에는 이 파일이 없으므로 여기 있는 것은 예전 판의 것이다.
+rm -f /data/nemesis/apps/korea.projection/bin/busybox 2>/dev/null
 BK=/data/nemesis/backup/korea.projection
 umask 077
 mkdir -p $BK
@@ -13,17 +17,17 @@ W=/data/local/tmp/korea.projection
 for u in /storage/usb0 /storage/usb1; do
   [ -f $u/korea-projection-debug ] && mkdir -p $W && : > $W/debug && echo "카플레이 디버그 로그 켬 ($W/cp.log)"
 done
+HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
 OLD=/data/local/tmp/cpdrive
 P=$(cat $OLD/watchdog.pid 2>/dev/null)
-if [ -n "$P" ] && $BB ps | $BB grep -v grep | $BB grep -q "^ *$P .*cpdrive/watchdog.sh"; then
+if [ -n "$P" ] && $PS | $BB grep -v grep | $BB grep -q "^ *$P .*cpdrive/watchdog.sh"; then
   kill $P 2>/dev/null
   [ -f $OLD/log.pid ] && kill $(cat $OLD/log.pid) 2>/dev/null
-  for p in $($BB ps | $BB grep -v grep | $BB grep "hostapd /data/misc/wifi/hostapd-cp.conf" | $BB awk '{print $1}'); do kill $p; done
+  for p in $($PS | $BB grep -v grep | $BB grep "hostapd /data/misc/wifi/hostapd-cp.conf" | $BB awk '{print $1}'); do kill $p; done
   # cp-drive의 dnsmasq도 (우리 것과 명령 앞부분이 같아서 남겨 두면 우리 dnsmasq가 시작되지 않는다)
-  for p in $($BB ps | $BB grep -v grep | $BB grep "dnsmasq --keep-in-foreground" | $BB awk '{print $1}'); do kill $p; done
+  for p in $($PS | $BB grep -v grep | $BB grep "dnsmasq --keep-in-foreground" | $BB awk '{print $1}'); do kill $p; done
   echo "USB 스크립트(cp-drive.sh)의 핫스팟을 멈춤"
 fi
-HOTSPOT_LIB=1 . /data/nemesis/apps/korea.projection/svc/hotspot.sh
 # busybox가 없는 내비(K3 BDPE·K8 GL3HEV, #15·#19): 무선 설정은 하지 않는다(서비스도 대기만 함). 한 번 알린다.
 # 상태 화면 앱만 설치한다(1.5.5): 앱이 없으면 Launch 때 NEMESIS가 "Error type 3 … does not exist"를 띄워 안내를 가린다.
 # 앱 설치가 실패해도 패키지 설치는 성공으로 둔다(Launch 때 다시 시도). 결과는 $W/app-install.log에 남는다.
