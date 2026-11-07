@@ -1,25 +1,13 @@
 name: 차량 제보
-description: 내 차에서 Korea Projection(무선 카플레이·무선 안드로이드 오토)이 되는지 알려 주세요
+description: 내 차에서 무선 카플레이·무선 안드로이드 오토가 되는지 알려 주세요(같은 차종 이슈로 자동으로 모입니다)
 title: "차량 제보: "
 labels: ["차량 제보"]
 body:
   - type: markdown
     attributes:
       value: |
-        제보해 주셔서 감사합니다. 동작이 확인된 차는 지원 목록에 추가합니다.
-
-        **비밀번호, 차대번호(VIN), 전화번호, 휴대폰 이름은 적지 마세요.** 리포트 파일에는 들어 있지 않습니다.
-
-        **같은 차를 이미 제보하셨다면 새 이슈 대신 그 이슈에 댓글로 남겨 주세요.** 파일도 댓글에 끌어다 놓으면 됩니다.
-
-        처음이면 [내 차 제보 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md)를 천천히 따라 해 주세요.
-
-        **제보 파일 만드는 방법 (Korea Projection 1.5.2 이상)**
-        1. 차를 세운 상태에서 USB를 꽂습니다.
-        2. NEMESIS Manager → My Packages → **Korea Projection: Wireless for Korean Cars**(1.5.6 이하는 Korea Projection 또는 Wireless Projection for Korean Cars) → **Launch**를 누릅니다.
-        3. "이제 USB를 빼셔도 됩니다"가 뜰 때까지 1~2분 기다립니다.
-        4. USB의 **`KoreaProjection-report`** 폴더에 파일 3개가 생깁니다: `1-report.md`, `2-car-report.json`, `3-log.txt`
-        5. 그 폴더를 열고 **모두 선택**(Windows `Ctrl`+`A`, Mac `⌘`+`A`)해서 아래 "제보 파일 3개" 칸에 끌어다 놓아 주세요.
+        같은 차종의 제보는 올리면 **자동으로 그 차종 이슈에 모입니다.** 아래 칸만 채워 주세요.
+        제보 파일은 USB `KoreaProjection-report` 폴더의 파일만 올려 주세요. `4-debug-private.txt`·`KoreaProjection-private` 폴더(운행 기록), 비밀번호·차대번호·전화번호·폰 이름은 **올리지 마세요.** ([제보 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md))
   - type: input
     id: car
     attributes:
@@ -31,56 +19,92 @@ body:
     id: product
     attributes:
       label: 내비 소프트웨어 버전
-      description: 리포트의 "펌웨어" 줄, 또는 설정 → 일반 → 소프트웨어 정보
+      description: 내비 화면의 QR로 열었다면 이미 채워져 있습니다. 아니면 리포트 맨 위 "펌웨어" 줄, 또는 설정 → 일반 → 소프트웨어 정보
       placeholder: "예: DEPEHEV.KOR.0000.V039.001.260902"
     validations:
       required: true
   - type: dropdown
-    id: result
+    id: phone
     attributes:
-      label: 결과
+      label: 쓰는 폰
       options:
-        - 무선 카플레이가 연결됨
-        - 아이폰에 무선 연결 제안은 뜨지만 연결이 안 됨
-        - 아이폰에 무선 연결 제안이 안 뜸
-        - 패키지가 설치되지 않음
-        - 기타
+        - 아이폰
+        - 안드로이드 폰
+        - 둘 다
     validations:
       required: true
-  - type: checkboxes
-    id: installed
+  - type: dropdown
+    id: install
     attributes:
-      label: 설치한 것
+      label: 설치
       options:
-        - label: NEMESIS
-        - label: HMG-API (버전은 리포트에 나옵니다)
-        - label: HMG-API 무선 모드 (wireless-carplay-aa)
-        - label: wireless.projection
-        - label: Korea Projection
-  - type: checkboxes
-    id: tested
+        - 설치했고 Launch 화면이 열림
+        - 설치는 됐지만 Launch를 누르면 오류가 뜨거나 화면이 안 열림
+        - USB를 꽂아도 설치하겠냐는 질문이 안 뜸
+        - NEMESIS를 설치할 수 없음(엔지니어링 모드 메뉴가 없음 등)
+    validations:
+      required: true
+  - type: input
+    id: verdict
     attributes:
-      label: 써 본 기능 (해당하는 것만)
+      label: Launch 화면 맨 위 문구
+      description: 색 띠 안의 문구를 그대로 적어 주세요. 노란 "알림" 줄이 있으면 그것도 함께 적어 주세요
+      placeholder: "예: 무선 카플레이 준비됨. 아이폰을 연결해 보세요."
+  - type: dropdown
+    id: carplay
+    attributes:
+      label: 무선 카플레이
       options:
-        - label: 카카오맵 길안내
-        - label: T맵 길안내
-        - label: 네이버 지도 길안내
-        - label: 애플 지도 길안내
-        - label: 계기판 길안내(회전 안내) 표시
+        - 연결됨
+        - 아이폰에 무선 연결 제안이 안 뜸
+        - 제안은 뜨지만 연결이 안 됨
+        - 연결되지만 자주 끊김
+        - 아이폰을 쓰지 않음
+    validations:
+      required: true
+  - type: dropdown
+    id: aa
+    attributes:
+      label: 무선 안드로이드 오토
+      description: 처음 연결할 때는 내비와 폰 양쪽에서 블루투스 등록을 지우고 새로 등록한 뒤, 내비의 "무선 Android Auto 사용" 안내에서 "사용"을 눌러 주세요
+      options:
+        - 연결됨
+        - 내비에 "무선 Android Auto" 안내는 뜨지만 연결이 안 됨
+        - 블루투스(전화)만 붙고 안드로이드 오토는 안 뜸
+        - 안드로이드 폰을 쓰지 않음
+    validations:
+      required: true
+  - type: dropdown
+    id: cluster
+    attributes:
+      label: 계기판·HUD 길안내
+      options:
+        - 회전·차로 안내가 나옴
+        - 일부만 나옴(직진만, 화살표가 이상함 등)
+        - 안 나옴
+        - 써 보지 않음
+  - type: checkboxes
+    id: apps
+    attributes:
+      label: 써 본 앱 (해당하는 것만)
+      options:
+        - label: 카카오맵
+        - label: T맵
+        - label: 네이버 지도
+        - label: 애플 지도
         - label: 음악 (멜론, 지니, 유튜브 뮤직 등)
         - label: 전화, 시리
-        - label: 무선 안드로이드 오토 (결과는 아래 "그 밖에 알려 주실 것"에 적어 주세요)
   - type: textarea
     id: report
     attributes:
       label: 상태 요약 (내비 화면의 QR로 열면 자동으로 채워짐)
-      description: 내비 상태 화면의 QR을 폰으로 찍어 이 양식을 열었다면 여기가 이미 채워져 있습니다. 컴퓨터로 열었다면 비워 두셔도 됩니다
+      description: 컴퓨터로 열었다면 비워 두셔도 됩니다
   - type: textarea
     id: files
     attributes:
-      label: 제보 파일 3개
-      description: USB의 KoreaProjection-report 폴더 안 파일 3개(1-report.md, 2-car-report.json, 3-log.txt)를 한꺼번에 끌어다 놓아 주세요. 파일 이름이 이 칸에 나타나면 성공입니다
-      placeholder: 여기에 파일 3개를 끌어다 놓으세요 (폰으로 QR을 찍어 열었다면, 나중에 컴퓨터에서 댓글로 붙여 주셔도 됩니다)
+      label: 제보 파일 (1-report.md, 2-car-report.json, 3-log.txt)
+      description: USB의 KoreaProjection-report 폴더 안 파일을 이 칸에 끌어다 놓아 주세요. 파일 이름이 이 칸에 나타나면 성공입니다. 4-debug-private.txt는 넣지 마세요
+      placeholder: 여기에 파일을 끌어다 놓으세요 (폰으로 QR을 찍어 열었다면, 나중에 컴퓨터에서 댓글로 붙여 주셔도 됩니다)
   - type: textarea
     id: notes
     attributes:

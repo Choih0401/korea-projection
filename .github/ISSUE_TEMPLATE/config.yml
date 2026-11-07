@@ -1,5 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: HMG-API Car Report 만드는 방법
-    url: https://github.com/VysseCodes/HMG-API/wiki/Car-Report
-    about: 지원 목록에 없는 새 차는 HMG-API Car Report도 함께 첨부해 주세요.
+  - name: 차종별 제보 이슈 (같은 차종 제보가 모인 곳)
+    url: https://github.com/StopDragon/korea-projection/issues?q=label%3A%22%F0%9F%93%8C+%EC%B0%A8%EC%A2%85+%EC%9D%B4%EC%8A%88%22
+    about: 차량 제보 양식으로 올리면 자동으로 여기에 모입니다. 내 차 펌웨어 앞 코드(예 DEPEHEV)로 찾아 보세요.
+  - name: 설치 가이드
+    url: https://github.com/StopDragon/korea-projection/blob/main/docs/install-guide.md
+    about: USB 만들기부터 설치·재부팅·폰 연결까지 한 단계씩
+  - name: 내 차 제보 가이드
+    url: https://github.com/StopDragon/korea-projection/blob/main/docs/car-report-guide.md
+    about: 제보 파일 만드는 법과 올리면 안 되는 파일

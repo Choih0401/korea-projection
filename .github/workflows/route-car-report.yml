@@ -1,0 +1,26 @@
+# 새 "차량 제보" 이슈를 같은 차종의 📌 차종 이슈로 옮긴다(설명: .github/scripts/route-car-report.js).
+name: 차량 제보를 차종 이슈로 옮기기
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  route:
+    if: startsWith(github.event.issue.title, '차량 제보')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const route = require('./.github/scripts/route-car-report.js');
+            core.info(await route({ github, context, core }));

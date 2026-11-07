@@ -1,0 +1,30 @@
+name: 설치·사용 질문
+description: 설치 방법, USB 만들기, 업데이트·삭제 등 내 차의 동작 결과가 아닌 질문
+title: "질문: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        먼저 [설치 가이드](https://github.com/StopDragon/korea-projection/blob/main/docs/install-guide.md)와 [README](https://github.com/StopDragon/korea-projection#readme)를 확인해 주세요. 대부분의 질문은 거기에 답이 있습니다.
+
+        **내 차에서 되는지·안 되는지 알려 주시는 것**은 질문이 아니라 [차종별 제보 이슈](https://github.com/StopDragon/korea-projection/issues?q=label%3A%22%F0%9F%93%8C+%EC%B0%A8%EC%A2%85+%EC%9D%B4%EC%8A%88%22)에 댓글로 남겨 주세요.
+
+        비밀번호, 차대번호(VIN), 전화번호, 폰 이름은 적지 마세요.
+  - type: textarea
+    id: question
+    attributes:
+      label: 무엇이 궁금하신가요?
+      description: 하려던 것과, 어디서 막혔는지 적어 주세요. 화면 사진이 있으면 끌어다 놓아 주세요
+    validations:
+      required: true
+  - type: input
+    id: car
+    attributes:
+      label: 차종 (알면)
+      placeholder: "예: 2021 그랜저 하이브리드"
+  - type: input
+    id: version
+    attributes:
+      label: Korea Projection 버전 (알면)
+      placeholder: "예: 1.7.1"
