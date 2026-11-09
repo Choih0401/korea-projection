@@ -1,0 +1,340 @@
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/GuidanceGate.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/GuidanceGate.java
+new file mode 100644
+--- /dev/null
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/GuidanceGate.java
+@@ -0,0 +1,14 @@
++package hmgapi.mods.wireless;
++
++/** Do not trust a stale CarPlay TBT bit, or a single disconnected read during handover. */
++final class GuidanceGate {
++    private long absentAt = -1L;
++    synchronized boolean guiding(boolean aa, int connection, boolean cp, long now) {
++        if (aa || !cp || connection != 0) {
++            absentAt = -1L;
++            return aa || cp;
++        }
++        if (absentAt < 0L || now < absentAt) absentAt = now;
++        return now - absentAt < 2000L;
++    }
++}
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/StockReplay.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/StockReplay.java
+--- a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/StockReplay.java
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/StockReplay.java
+@@ -86,6 +86,17 @@
+         return o;
+     }
+
++    /** Explicit phone end: start restoration even if the stock engine sends no new call.
++     * Cached calls still pass the live phone check in Wireless before being resent. */
++    synchronized Out phoneEnded(long now) {
++        Out o = new Out();
++        if (!blockedSince || endedAt >= 0L) return o;
++        endedAt = now;
++        step = 0;
++        o.backupGen = ++gen;
++        return o;
++    }
++
+     /** 백업 타이머: 순정 호출이 오지 않아 남은 차례가 있으면 지금 한 번 보내고 끝낸다 */
+     synchronized Out backup(int g) {
+         Out o = new Out();
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/Wireless.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/Wireless.java
+--- a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/Wireless.java
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/Wireless.java
+@@ -137,7 +137,7 @@
+                 @Override
+                 protected void beforeHookedMethod(Param p) {
+                     if (REPLAYING.get() != null) return;   // 우리가 다시 보내는 순정 값: 그대로 통과
+-                    boolean phone = Car.phoneGuiding(app.context);
++                    boolean phone = phoneGuiding(app.context);
+                     String line = seen.line(m, debug ? stockArgs(m, p.args) : p.args, phone);
+                     if (line != null) mod.log(line);
+                     // 막든 통과하든 최신 순정 값을 기억하고, 폰 안내가 끝났으면 이 호출 자리에서 다시 보낸다(2차 리뷰 1)
+@@ -156,10 +156,46 @@
+                 }
+             });
+         }
++        try {
++            app.context.registerReceiver(new android.content.BroadcastReceiver() {
++                @Override public void onReceive(android.content.Context c, android.content.Intent i) {
++                    // Never trust the broadcast as evidence: recheck locally, including AA.
++                    final long[] delays = { 0L, 2000L, 5000L };
++                    for (long delay : delays) replayHandler().postDelayed(new Runnable() {
++                        @Override public void run() {
++                            try {
++                                if (phoneGuiding(app.context)) return;
++                                StockReplay.Out o = replay.phoneEnded(android.os.SystemClock.elapsedRealtime());
++                                if (o.backupGen != 0) scheduleBackup(mod, app, replay, o.backupGen);
++                            } catch (Throwable t) { mod.error("navigation: guidance end restore", t); }
++                        }
++                    }, delay);
++                }
++            }, new android.content.IntentFilter("hmgapi.mods.wireless.CARPLAY_GUIDANCE_ENDED"));
++        } catch (Throwable t) { mod.error("navigation: guidance end receiver", t); }
+         if (debug) observeOnly(mod, seen, StockLog.CLU_DATA_14, "updateCluDataNew_14", int.class, int.class, int.class, int.class, int.class);
+         if (debug) observeOnly(mod, seen, StockLog.ROAD_EVENT, "updateRoadEventInfo", byte[].class);
+         mod.log("navigation: turn-by-turn and lanes yield to the phone in " + app.processName
+                 + (debug ? " (debug: stock values logged)" : ""));
++    }
++
++    /** A stale DiPO TBT bit must not block stock navigation after the session ended.
++     * Unknown connection state keeps the original behavior; AA always has priority. */
++    static final GuidanceGate guidanceGate = new GuidanceGate();
++    static boolean phoneGuiding(android.content.Context c) {
++        boolean aa = Car.androidAutoGuiding(c), cp = Car.carPlayGuiding(c);
++        int connected = -1;
++        if (!aa && cp) {
++            try {
++                Object dipo = c.getSystemService("dipo");
++                if (dipo != null) {
++                    Object state = Points.call(null, "framework.dipo_manager.current_stat", dipo);
++                    if (Integer.valueOf(0).equals(state)) connected = 0;
++                    else if (Integer.valueOf(1).equals(state)) connected = 1;
++                }
++            } catch (Throwable t) { /* unknown retains the original guidance flag */ }
++        }
++        return guidanceGate.guiding(aa, connected, cp, android.os.SystemClock.elapsedRealtime());
+     }
+
+     /** 로그용 기기 주소 가리기(모두 가림, Mac.mask) */
+@@ -214,7 +250,7 @@
+             @Override
+             public void run() {
+                 try {
+-                    if (Car.phoneGuiding(app.context)) return;
++                    if (phoneGuiding(app.context)) return;
+                     resend(mod, replay.backup(gen));
+                 } catch (Throwable t) {
+                     mod.error("navigation: stock cluster resend", t);
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/CpTurns.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/CpTurns.java
+--- a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/CpTurns.java
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/CpTurns.java
+@@ -123,6 +123,10 @@
+     static final long REFRESH_MAX_MS = 300000L;
+     /** run (on this thread) when guidance becomes active, so the caller starts calling refresh() */
+     Runnable onActive;
++    /** Ask the owner to recheck the real session, rather than assume silence is an end. */
++    Runnable onSilence;
++    /** Notify the navigation process after an actual clear, including normal state 0. */
++    Runnable onCleared;
+     /** the crossroad name last sent and when; resent only when it changes or after CROSSROAD_MS */
+     String crossroad;
+     long crossroadAt;
+@@ -586,7 +590,11 @@
+         cluster.tbtSubInfo(0f, CLEAR_DIST_ERR, CLEAR_UNIT, 0, 0, CLEAR_TIME, CLEAR_TIME, 0f, -1, CLEAR_EST_POINT);
+         cluster.crossroadName("");
+         cluster.destinationName(0, "");
+-    }
++        if (onCleared != null) onCleared.run();
++    }
++
++    /** Pending data must still be reconciled after refresh times out. */
++    boolean hasGuidance() { return activeId != null || shown || hudShown; }
+
+     /**
+      * Called about every second on the same thread while active() (the caller stops calling it
+@@ -607,6 +615,7 @@
+             Dipo.log("CarPlay: no route guidance from the phone for " + (t - phoneAt) / 1000L + " s, turn-by-turn not resent any more");
+             activeId = null;
+             barOut.send(context, PhoneBarOut.NONE, t);
++            if (onSilence != null) onSilence.run();
+             return;
+         }
+         if (lastHud != null && t - hudAt >= HUD_RESEND_MS) {
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/Dipo.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/Dipo.java
+--- a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/Dipo.java
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/Dipo.java
+@@ -68,6 +68,10 @@
+     static Handler turnsHandler;
+     static CpTurns turns;
+     static RgListener rg;
++    static final GuidanceSession guidanceSession = new GuidanceSession();
++    static final String GUIDANCE_ENDED = "hmgapi.mods.wireless.CARPLAY_GUIDANCE_ENDED";
++    static final long RECONCILE_MS = 5000L;
++    static int stateReadErrors;
+     /** set while HMG-API itself calls the iAP2 server (its own route guidance restart) */
+     static final ThreadLocal<Boolean> OWN = new ThreadLocal<Boolean>();
+     /** onSessionDetails' device id while it runs, and whether its address lookup came back empty */
+@@ -112,6 +116,7 @@
+             public void onServiceDisconnected(ComponentName name) {
+                 iap2 = null;
+                 log("DiPO: iAP2 server gone");
++                requestGuidanceCheck("iAP2 service disconnected");
+             }
+         }, Context.BIND_AUTO_CREATE);
+         log("DiPO: iAP2 server " + (bound ? "binding" : "can't be bound"));
+@@ -150,6 +155,22 @@
+                 turnsHandler.postDelayed(REFRESH, 1000L);
+             }
+         };
++        turns.onSilence = new Runnable() {
++            @Override public void run() { requestGuidanceCheck("route silence"); }
++        };
++        turns.onCleared = new Runnable() {
++            @Override public void run() {
++                try {
++                    // App parts have a separate class loader: keep this action equal to Wireless's.
++                    Intent i = new Intent(GUIDANCE_ENDED);
++                    i.setPackage("com.mnsoft.navi");
++                    i.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
++                    app.context.sendBroadcast(i);
++                } catch (Throwable t) { error("CarPlay guidance end notification", t); }
++            }
++        };
++        installGuidanceLifecycle();
++        turnsHandler.postDelayed(GUIDANCE_WATCH, RECONCILE_MS);
+         rg = new RgListener();
+         mod.hook(app.classLoader, "dipo.iap2_proxy.stop_route_guidance", new MethodHook() {
+             @Override
+@@ -164,6 +185,86 @@
+             }
+         });
+         log("CarPlay: turn-by-turn to the cluster (HMG-API's route guidance listener)");
++    }
++
++    /** Read actual DiPO service state; bridge flags alone can survive suspend. */
++    static int projectionState(boolean guidance) {
++        try {
++            Object dipo = app.context.getSystemService("dipo");
++            if (dipo == null) return -1;
++            Object v = Points.call(null, guidance ? "framework.dipo_manager.is_turn_by_turn"
++                    : "framework.dipo_manager.current_stat", dipo);
++            if (guidance) return v instanceof Boolean ? (((Boolean) v) ? 1 : 0) : -1;
++            if (Integer.valueOf(0).equals(v)) return 0;
++            if (Integer.valueOf(1).equals(v)) return 1;
++        } catch (Throwable t) {
++            if (stateReadErrors++ < 3) error("CarPlay guidance state unavailable", t);
++        }
++        return -1;
++    }
++
++    static void reconcileGuidance(String reason) {
++        if (turns == null || !turns.hasGuidance()) return;
++        long now = android.os.SystemClock.elapsedRealtime();
++        int connected = projectionState(false), guiding = projectionState(true);
++        if (!guidanceSession.shouldClear(connected, guiding, Car.androidAutoGuiding(app.context), now)) return;
++        log("CarPlay: stale guidance cleared reason=" + reason + " connected=" + connected + " guiding=" + guiding);
++        turns.disconnected();
++        guidanceSession.activity(now);
++    }
++
++    static void requestGuidanceCheck(final String reason) {
++        if (turnsHandler == null) return;
++        post(new Runnable() {
++            @Override public void run() {
++                final int gen = guidanceSession.generation();
++                reconcileGuidance(reason);
++                turnsHandler.postDelayed(new Runnable() {
++                    @Override public void run() {
++                        // A new session or phone update invalidates an old end check.
++                        if (gen != guidanceSession.generation()) return;
++                        try { reconcileGuidance(reason); }
++                        catch (Throwable t) { error("CarPlay guidance recheck", t); }
++                    }
++                }, GuidanceSession.CONFIRM_MS);
++            }
++        });
++    }
++
++    /** Bounded cadence while this process lives; no binder reads when no CP data remains.
++     * A missed screen/ignition callback is covered by the first tick after resume. */
++    static final Runnable GUIDANCE_WATCH = new Runnable() {
++        @Override public void run() {
++            try { reconcileGuidance("watchdog/resume"); }
++            catch (Throwable t) { error("CarPlay guidance watchdog", t); }
++            finally { turnsHandler.postDelayed(this, RECONCILE_MS); }
++        }
++    };
++
++    static void installGuidanceLifecycle() {
++        for (String point : new String[] { "session_created", "session_started" }) {
++            mod.hook(app.classLoader, "dipo.carplay." + point, new MethodHook() {
++                @Override protected void afterHookedMethod(Param p) {
++                    post(new Runnable() {
++                        @Override public void run() {
++                            guidanceSession.activity(android.os.SystemClock.elapsedRealtime());
++                        }
++                    });
++                }
++            });
++        }
++        mod.hook(app.classLoader, "dipo.carplay.session_finalized", new MethodHook() {
++            @Override protected void afterHookedMethod(Param p) {
++                requestGuidanceCheck("CarPlay session finalized");
++            }
++        });
++        try {
++            app.context.registerReceiver(new BroadcastReceiver() {
++                @Override public void onReceive(Context c, Intent i) {
++                    requestGuidanceCheck("screen on/resume");
++                }
++            }, new IntentFilter(Intent.ACTION_SCREEN_ON));
++        } catch (Throwable t) { error("CarPlay resume receiver", t); }
+     }
+
+     /** whether REFRESH is scheduled (only touched on turnsHandler's thread) */
+@@ -233,12 +334,7 @@
+         public void disconnected(final int component) {
+             // as DiPO's listener: component 2 isn't a session, and the bridge's own sessions end while wireless CarPlay runs
+             if (component == 2 || (bridge && Bridge.dipoIgnoreDisconnect(component))) return;
+-            post(new Runnable() {
+-                @Override
+-                public void run() {
+-                    turns.disconnected();
+-                }
+-            });
++            requestGuidanceCheck("iAP2 route listener disconnected");
+         }
+
+         @Override
+@@ -247,6 +343,7 @@
+             post(new Runnable() {
+                 @Override
+                 public void run() {
++                    guidanceSession.activity(android.os.SystemClock.elapsedRealtime());
+                     if (what == RG_UPDATE) turns.routeGuidance(msg);
+                     else if (what == RG_MANEUVER) turns.maneuver(msg);
+                     else turns.lanes(msg);
+diff --git a/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/GuidanceSession.java b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/GuidanceSession.java
+new file mode 100644
+--- /dev/null
++++ b/mods/wireless-carplay-aa/src/hmgapi/mods/wireless/dipo/GuidanceSession.java
+@@ -0,0 +1,38 @@
++package hmgapi.mods.wireless.dipo;
++
++/** Serialized on turnsHandler. Unknown reads never mean disconnected; two stable
++ * observations prevent a transient handover from clearing a live/new route. */
++final class GuidanceSession {
++    static final long CONFIRM_MS = 2000L, START_GRACE_MS = 5000L;
++    private int generation;
++    private long activityAt, absentAt = -1L;
++    private int absentConnection = -1;
++
++    int generation() { return generation; }
++
++    void activity(long now) {
++        generation++;
++        activityAt = now;
++        forgetAbsence();
++    }
++
++    boolean shouldClear(int connection, int guiding, boolean androidAuto, long now) {
++        boolean absent = now - activityAt >= START_GRACE_MS
++                && (connection == 0 || (connection == 1 && guiding == 0));
++        if (androidAuto || !absent) {
++            forgetAbsence();
++            return false;
++        }
++        if (absentAt < 0L || absentConnection != connection || now < absentAt) {
++            absentAt = now;
++            absentConnection = connection;
++            return false;
++        }
++        return now - absentAt >= CONFIRM_MS;
++    }
++
++    private void forgetAbsence() {
++        absentAt = -1L;
++        absentConnection = -1;
++    }
++}
