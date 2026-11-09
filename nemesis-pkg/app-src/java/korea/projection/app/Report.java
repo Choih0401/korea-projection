@@ -77,6 +77,9 @@ final class Report {
         if ("off".equals(get("bridge")))
             return "무선 모드의 'Wireless CarPlay' 설정이 꺼져 있습니다. HMG-API 앱에서 켜고 Apply changes 후 다시 시작해 주세요.";
         if ("off".equals(get("hooks"))) return hooksOffAdvice();
+        // 1.7.2: HMG-API가 이 차에서 무선 모드의 훅을 켜지 않음(차에 없는 훅 지점이 있음, 스포티지 NQ5 #46)
+        if ("off".equals(get("mod_hooks")))
+            return "HMG-API가 이 차에서 무선 모드를 켜지 못했습니다(이 차와 맞지 않는 부분이 있음). 내비를 재부팅해 보시고, 그래도 같으면 USB를 꽂고 Launch로 리포트를 보내 주세요.";
         if (!yes("feat_carplay")) return "무선 카플레이 기능이 꺼져 있습니다. HMG-API 무선 모드를 확인해 주세요.";
         // 1.6.2: 순정 카플레이 AP를 쓰는 차인데 지금 순정 Wi-Fi가 꺼져 있음(서비스는 우리 핫스팟을 켜지 않고 기다린다)
         if (!stockAp() && yes("stock_seen") && !yes("our_ap"))
@@ -101,6 +104,7 @@ final class Report {
         if (hmgapiVer().isEmpty() || older(hmgapiVer(), MIN_HMGAPI) != 0) return 2;
         if (foreign()) return 2;
         if ("no".equals(get("mod")) || "no".equals(get("mod_on")) || "off".equals(get("bridge"))) return 2;
+        if ("off".equals(get("mod_hooks"))) return 2;
         // 훅 기록은 지난 부팅 것일 수 있어 노랑
         if ("off".equals(get("hooks"))) return 1;
         if (!stockAp() && (!yes("our_ap") || !yes("our_dhcp"))) return 1;
@@ -234,6 +238,7 @@ final class Report {
         if ("no".equals(get("mod"))) return "없음 (필요)";
         if ("no".equals(get("mod_on"))) return "꺼짐 (켜야 함)";
         if ("off".equals(get("bridge"))) return "켜짐, Wireless CarPlay 설정 꺼짐";
+        if ("off".equals(get("mod_hooks"))) return "켜짐, 훅이 안 켜짐 (리포트 참고)";
         if (yes("mod_on")) return "켜짐" + pendingNote();
         return yn("mod");
     }
@@ -273,6 +278,46 @@ final class Report {
             out.add(new String[] { l.substring(0, a), msg });
         }
         return out;
+    }
+
+    /** 1.7.2: 안내가 이만큼(초) 지나면 보이지 않는다(서비스도 10분 뒤 지운다. 서비스가 멈춰 남은 안내를 가리려고) */
+    static final long HINT_SHOW = 600;
+
+    /**
+     * 1.7.2: 서비스(svc/hotspot.sh hint_write)가 30초마다 정하는 상태 안내(/data/local/tmp/korea-projection-hint.txt, key=value).
+     * 이번 부팅의 것만 보인다. 돌려주는 값은 {수준(0 좋음·1 확인 필요), 문구, 시각(초, 문구 옆에 HH:MM로 붙일 때만, 아니면 "")}.
+     * 확인이 필요한 것(설정 바뀜·아이폰·AA 안내)을 먼저, "준비됨·연결됨"은 뒤에 둔다. 문구는 내비 화면에서 읽기 좋게 한두 문장.
+     */
+    static List<String[]> hints(String text, String boot, long now) {
+        List<String[]> out = new ArrayList<String[]>();
+        Report h = parse(text);
+        if (boot == null || boot.isEmpty() || !boot.trim().equals(h.get("boot"))) return out;
+        if ("wait".equals(h.get("conf")))
+            out.add(new String[] { "1", "Wi-Fi 설정이 바뀌었습니다. 카플레이 연결이 끝나면 핫스팟을 다시 시작합니다.", "" });
+        if ("wifi".equals(h.get("iph")) && h.fresh("iph_t", now))
+            out.add(new String[] { "1", "아이폰이 차 Wi-Fi에 오지 않습니다. 아이폰 설정 → Wi-Fi에서 차 네트워크를 지우고 다시 연결하세요.", "" });
+        String aa = h.get("aa");
+        boolean aaNow = h.fresh("aa_t", now);
+        if ("bt".equals(aa) && aaNow)
+            out.add(new String[] { "1", "안드로이드 폰의 블루투스를 껐다 켜 주세요(또는 내비 블루투스 화면에서 폰을 다시 연결).", "" });
+        if ("cpwait".equals(aa) && aaNow)
+            out.add(new String[] { "1", "카플레이가 연결되어 있어 안드로이드 오토는 기다립니다.", "" });
+        if ("ok".equals(aa) && aaNow)
+            out.add(new String[] { "0", "무선 안드로이드 오토 연결됨", h.get("aa_t") });
+        else if (h.num("aa_ready") > 0)
+            out.add(new String[] { "0", "무선 안드로이드 오토 준비됨", h.get("aa_ready") });
+        return out;
+    }
+
+    /** 숫자 값(초). 없거나 숫자가 아니면 0 */
+    long num(String k) {
+        try { return Long.parseLong(get(k)); } catch (NumberFormatException e) { return 0; }
+    }
+
+    /** 시각 k가 있고 HINT_SHOW초 안인가 */
+    boolean fresh(String k, long now) {
+        long t = num(k);
+        return t > 0 && now - t <= HINT_SHOW;
     }
 
     /** 버전 칸: 값 옆에 필요 조건을 붙인다 */
@@ -344,6 +389,8 @@ final class Report {
         if (yes("mod_foreign")) lines.add(1, "mod_foreign: yes");
         // 1.7.1: 모드 업데이트 대기도 yes일 때만 앞쪽에(리포트를 새 판 전에 만들었다는 표시)
         if (yes("mod_pending")) lines.add(1, "mod_pending: yes (" + get("modver") + ")");
+        // 1.7.2: 무선 모드 훅이 안 켜졌으면 앞쪽에
+        if ("off".equals(get("mod_hooks"))) lines.add(1, "mod_hooks: off");
         String url = build(lines);
         while (url.length() > MAX_URL && lines.size() > 2) {
             lines.remove(lines.size() - 1);

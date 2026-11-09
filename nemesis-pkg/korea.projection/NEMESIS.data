@@ -3,7 +3,7 @@ version=1.1
 id=korea.projection
 name=Korea Projection: Wireless for Korean Cars
 type=service,application
-package-version=1.7.1
+package-version=1.7.2
 short-desc="Wireless CarPlay and Android Auto for Korean Hyundai/Kia cars"
 detailed-desc="순정 핫스팟이 켜지지 않는 한국 차량에서 무선 카플레이와 무선 안드로이드 오토를 사용할 수 있습니다.
 
@@ -14,7 +14,7 @@ detailed-desc="순정 핫스팟이 켜지지 않는 한국 차량에서 무선 �
 개선에 많은 도움이 됩니다.
 
 제작: hello@stopdragon.kr"
-os="DEPEHEV.KOR.*.260902,DEPEPHEV.KOR.*.260902,IGPE.KOR.*.260902,IGPEHEV.KOR.*.260902,IGPE21.KOR.*.260902,DN822HEV.KOR.*.260902,JSN.KOR.*.260902,DL3HEV.KOR.*.260902,YGPE.KOR.*.260902,YGPEHEV.KOR.*.260902,MQ422HEV.KOR.*.260902,CKPE.KOR.*.260902,BDPE.KOR.*"
+os="DEPEHEV.KOR.*.260902,DEPEPHEV.KOR.*.260902,IGPE.KOR.*.260902,IGPEHEV.KOR.*.260902,IGPE21.KOR.*.260902,DN822HEV.KOR.*.260902,JSN.KOR.*.260902,DL3HEV.KOR.*.260902,YGPE.KOR.*.260902,YGPEHEV.KOR.*.260902,MQ422HEV.KOR.*.260902,CKPE.KOR.*.260902,CN7.KOR.*.260902,CN7HEV.KOR.*.260902,SK3EV.KOR.*.260902,LX2.KOR.*.260902,TMFL.KOR.*.260902,AX1.KOR.*.260902,DN8.KOR.*.260902,NX4HEV.KOR.*.260902,NX4.KOR.*.260902,SG2EV.KOR.*.260902,MQ4HEV.KOR.*.260902,MQ422.KOR.*.260902,DL3HEV22.KOR.*.260902,GL3HEV.KOR.*.260902,BDPE.KOR.*"
 models="*_kr"
 depends="!niro.carplay.hotspot"
 postinstall=scripts/post.sh

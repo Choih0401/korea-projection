@@ -182,6 +182,35 @@ public class ReportTest {
             && "켜짐".equals(row(r, "HMG-API 무선 모드")));
         String mq = java.net.URLDecoder.decode(Report.parse(GOOD + "modver=2.2.0\nmod_pending=yes\n").issueUrl(), "UTF-8");
         check("  QR 요약 앞쪽에 mod_pending과 차의 판", mq.contains("mod_pending: yes (2.2.0)"));
+        // 1.7.2: 무선 모드 훅이 안 켜짐(스포티지 NQ5 #46)
+        Report mh = Report.parse(GOOD + "mod_hooks=off\n");
+        check("1.7.2 무선 모드 훅 안 켜짐 → 'HMG-API가 이 차에서 무선 모드를 켜지 못했습니다', 빨강, 모드 칸 표시",
+            mh.verdict().startsWith("HMG-API가 이 차에서 무선 모드를 켜지 못했습니다") && mh.level() == 2 && row(mh, "HMG-API 무선 모드").contains("훅이 안 켜짐"));
+        check("  mod_hooks=on·없음이면 예전 판정 그대로", Report.parse(GOOD + "mod_hooks=on\n").verdict().equals(r.verdict()) && Report.parse(GOOD + "mod_hooks=on\n").level() == r.level());
+        check("  QR 요약 앞쪽에 mod_hooks: off", java.net.URLDecoder.decode(mh.issueUrl(), "UTF-8").contains("mod_hooks: off"));
+        // 1.7.2: 상태 안내 파일(hint_write)
+        long now = 1700001000L;
+        String hb = "boot=boot-A\naa_ready=1700000900\naa=\naa_t=\niph=\niph_t=\nconf=\nconf_t=\n";
+        java.util.List<String[]> h0 = Report.hints(hb, "boot-A", now);
+        check("1.7.2 안내: 신호가 켜지면 '무선 안드로이드 오토 준비됨'과 시각, 초록", h0.size() == 1 && "0".equals(h0.get(0)[0])
+            && "무선 안드로이드 오토 준비됨".equals(h0.get(0)[1]) && "1700000900".equals(h0.get(0)[2]));
+        check("  지난 부팅·부팅 id 모름·파일 없음이면 없음", Report.hints(hb, "boot-B", now).isEmpty() && Report.hints(hb, null, now).isEmpty()
+            && Report.hints(null, "boot-A", now).isEmpty());
+        java.util.List<String[]> h1 = Report.hints(hb.replace("aa=\naa_t=", "aa=bt\naa_t=1700000950"), "boot-A", now);
+        check("  aa=bt → '안드로이드 폰의 블루투스를 껐다 켜 주세요(…다시 연결)' 노랑이 먼저, 준비됨은 뒤", h1.size() == 2 && "1".equals(h1.get(0)[0])
+            && h1.get(0)[1].startsWith("안드로이드 폰의 블루투스를 껐다 켜 주세요") && h1.get(0)[1].contains("내비 블루투스 화면에서 폰을 다시 연결")
+            && h1.get(1)[1].equals("무선 안드로이드 오토 준비됨"));
+        check("  aa=cpwait → '카플레이가 연결되어 있어 안드로이드 오토는 기다립니다'",
+            Report.hints(hb.replace("aa=\naa_t=", "aa=cpwait\naa_t=1700000950"), "boot-A", now).get(0)[1].equals("카플레이가 연결되어 있어 안드로이드 오토는 기다립니다."));
+        java.util.List<String[]> h2 = Report.hints(hb.replace("aa=\naa_t=", "aa=ok\naa_t=1700000980"), "boot-A", now);
+        check("  aa=ok → '연결됨'과 시각(준비됨 대신)", h2.size() == 1 && "무선 안드로이드 오토 연결됨".equals(h2.get(0)[1]) && "1700000980".equals(h2.get(0)[2]));
+        check("  10분 지난 AA·아이폰 안내는 보이지 않음(서비스가 멈춰 남은 것)",
+            Report.hints(hb.replace("aa=\naa_t=", "aa=bt\naa_t=1700000000").replace("iph=\niph_t=", "iph=wifi\niph_t=1700000000"), "boot-A", now).size() == 1);
+        java.util.List<String[]> h3 = Report.hints(hb.replace("iph=\niph_t=", "iph=wifi\niph_t=1700000990").replace("conf=\nconf_t=", "conf=wait\nconf_t=1700000990"), "boot-A", now);
+        check("  conf=wait·iph=wifi 문구(설정 바뀜이 맨 위, 아이폰 Wi-Fi 지우고 다시 연결)", h3.size() == 3
+            && h3.get(0)[1].startsWith("Wi-Fi 설정이 바뀌었습니다") && h3.get(1)[1].contains("아이폰 설정 → Wi-Fi에서 차 네트워크를 지우고 다시 연결하세요"));
+        check("  안내 문구에 SSID·비밀번호 같은 값이 들어갈 자리가 없음(코드만 읽음)",
+            Report.hints(hb.replace("aa=\n", "aa=MyNet secret\n"), "boot-A", now).size() == 1);
         System.out.println(fails == 0 ? "Java 모두 통과" : "Java 실패 " + fails + "개");
         System.exit(fails == 0 ? 0 : 1);
     }

@@ -45,7 +45,10 @@ pver() { _v=$($BB grep '^package-version=' "$1" 2>/dev/null); echo "${_v#package
 # USB 제보 폴더 이름. 사용자가 찾기 쉽게 고정한다(안내문과 같아야 한다).
 # 안의 파일: 1-report.md(이 스크립트), 2-car-report.json(carreport.sh), 3-log.txt(이 스크립트)
 RDIR=${RDIR:-KoreaProjection-report}
-APLOG=${APLOG:-/data/nemesis/logs/korea.projection/ap.log}
+# 1.7.2: 비공개 디버그 로그는 제보 폴더 밖의 다른 폴더에 둔다. 제보 폴더를 "모두 선택"해 올려도 섞이지 않게(#56).
+PDIR=${PDIR:-KoreaProjection-private}
+# NEMESIS가 정한 위치(hotspot.sh에도 같은 기본값이 있다). 여기서는 그대로 다시 정한다(PC 테스트가 이 줄의 경로를 바꾼다)
+APLOG=/data/nemesis/logs/korea.projection/ap.log
 # busybox가 없는 내비(K3 BDPE·K8 GL3HEV, tcc803x, #15·#19): 보통 리포트는 못 만든다. 셸 기본 명령(grep, mkdir, ls)만으로
 # USB에 짧은 리포트를 남긴다(제품, 플랫폼, 이 내비에 있는 명령 목록: busybox 없이 다시 만들 때 참고). 개인정보는 없다.
 # 1.5.5: 상태 화면 앱도 쓴다. 앱이 없으면 다시 설치하고(설치 때 실패했을 수 있음), 앱이 읽을 짧은 상태 파일
@@ -93,7 +96,7 @@ fi
 for u in $USBS; do
   bbx grep -q " $u " /proc/mounts 2>/dev/null || continue
   if [ -f $u/kp-aa-off ]; then
-    bbx mkdir -p $BK 2>/dev/null; : > $AAOFF; aa_sig 0
+    bbx mkdir -p $BK 2>/dev/null; : > $AAOFF; aa_sig 0 off
   elif [ -f $u/kp-aa-on ]; then
     rm -f $AAOFF
   fi
@@ -117,7 +120,10 @@ logs() {
   echo "# Korea Projection 로그 ($(date '+%Y-%m-%d %H:%M'))"
   echo "제품: $(getprop ro.build.product), 패키지 $(pver $APP/NEMESIS.data)"
   echo "휴대폰 이름, 블루투스 주소, IP 주소, 전화번호는 가렸습니다. 첨부하기 전에 한 번 읽어 보시고, 내 정보(폰 이름, 연락처 이름 등)가 보이면 그 줄을 지워 주세요."
-  for _f in $APLOG $NOWLAN_LOG $NOCHIP_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
+  # 1.7.2(P-15): ap.log는 크기 제한으로 ap.log.1에 앞부분이 있을 수 있다: 둘을 이어 마지막 400줄
+  echo; echo "== ${APLOG##*/}"
+  if [ -f $APLOG ]; then $BB cat $APLOG.1 $APLOG 2>/dev/null | lastmask 400; else echo "(없음)"; fi
+  for _f in $NOWLAN_LOG $NOCHIP_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
     echo; echo "== ${_f##*/}"
     if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
   done
@@ -142,7 +148,7 @@ logs() {
 privlog() {
   echo "# Korea Projection 디버그 로그 (비공개)"
   echo
-  echo "**이 파일은 GitHub 이슈에 올리지 마세요.** 운행 기록(길안내·음악 등)이 들어 있습니다."
+  echo "**이 파일(KoreaProjection-private 폴더)은 GitHub 이슈에 올리지 마세요.** 운행 기록(길안내·음악 등)이 들어 있습니다."
   echo "필요할 때 개발자에게 따로(카톡·메일) 보내 주세요. 폰 이름·MAC·IP·전화번호는 가렸지만, 모든 꼴을 장담하지는 못합니다."
   echo
   $BB cat $W/cp.log.1 $W/cp.log 2>/dev/null | $BB awk -v n=8000 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' | $BB awk "$KPMASK"
@@ -194,6 +200,62 @@ wifilog() {
   logcat -d -v time 2>/dev/null | $BB grep -E "$WIFITAGS" | $BB grep -v -i -E "$WIFIDROP" | lastmask 300
 }
 
+# 1.7.2(P-8·P-12): 연결 진단 줄. 숫자·짧은 영문 값만 넣는다(SSID·비밀번호·폰 이름·MAC·IP 없음).
+# logcat은 한 번만 읽어(-d) 순정 WifiService의 "Last mode:"·"[Feature]" 줄(마지막 것, 영문·괄호만 남김)과 계기판 곡 제목 확인
+# 줄의 개수만 센다(줄 내용은 넣지 않는다). 부팅 로그는 버퍼가 짧아 대개 남지 않는다("버퍼에 없음").
+diag() {
+  echo "## 연결 진단 (숫자·짧은 값만)"
+  logcat -d -v time 2>/dev/null | $BB awk '
+    function clean(s) { gsub(/[^A-Za-z0-9 (),.\/-]/, "", s); return substr(s, 1, 120) }
+    / [VDIWEF]\/WifiService *\(/ && index($0, "Last mode: ") > 0 { lm = clean(substr($0, index($0, "Last mode: ") + 11)) }
+    / [VDIWEF]\/WifiService *\(/ && index($0, "[Feature] ") > 0 { ft = clean(substr($0, index($0, "[Feature] ") + 10)) }
+    index($0, "getOpState::mode = DIPO") > 0 { c1++ }
+    index($0, "updateClusterInfo::mode = DIPO") > 0 { c2++ }
+    index($0, "updateClusterWithArtistInfo") > 0 { c3++ }
+    index($0, "updateFilename") > 0 { c4++ }
+    index($0, "PIO / OPIO model doesn") > 0 { c5++ }
+    index($0, "Cluster New Protocol") > 0 { c6++ }
+    index($0, "Ignore invalid TP Mode") > 0 { c7++ }
+    END {
+      print "- 순정 부팅 AP 복구(WifiService Last mode): " (lm == "" ? "버퍼에 없음" : lm)
+      print "- 순정 Wi-Fi 기능 판정(WifiService [Feature]): " (ft == "" ? "버퍼에 없음" : ft)
+      print "- 계기판 곡 제목 확인 줄 수(logcat): getOpState DIPO " c1 + 0 ", updateClusterInfo DIPO " c2 + 0 ", updateClusterWithArtistInfo " c3 + 0 ", updateFilename " c4 + 0 ", PIO/OPIO TP 안 보냄 " c5 + 0 ", Cluster New Protocol " c6 + 0 ", invalid TP Mode " c7 + 0
+    }'
+  _ss=; _su=
+  [ -f $W/svc.start ] && read _ss _su < $W/svc.start
+  if [ -n "$_ss" ] && [ "$_ss" = "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" ]; then
+    echo "- 우리 서비스 시작: 부팅 뒤 ${_su}초(이번 부팅 처음 시작)"
+  else
+    echo "- 우리 서비스 시작: 이번 부팅 기록 없음"
+  fi
+  # HMG-API 로그(두 파일)에서: 브리지가 순정 AP가 이미 켜져 있다고 본 횟수, 모드의 AA 훅 "N of M"(프로세스별 마지막 것)
+  # 1.7.2(P-7): 우리 AP가 돌고 있어 브리지가 순정 AP 켜기를 건너뛴 횟수(새 모드의 줄, 개수만)도 따로 센다
+  $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | $BB awk '
+    index($0, "hotspot already up (mode 2)") > 0 { up++ }
+    index($0, "our hotspot already up, stock AP-on skipped") > 0 { sk++ }
+    index($0, "Android Auto AP hooks in ") > 0 {
+      s = substr($0, index($0, "Android Auto AP hooks in ") + 25); i = index(s, ": "); if (i == 0) next
+      p = substr(s, 1, i - 1); gsub(/[^A-Za-z0-9._]/, "", p); v = substr(s, i + 2); sub(/ *\(.*/, "", v); gsub(/[^0-9a-z ]/, "", v)
+      if (!(p in h)) o[++k] = p; h[p] = substr(v, 1, 12) }
+    END {
+      print "- HMG-API hotspot already up (mode 2): " up + 0 "번(HMG-API 로그 전체)"
+      print "- HMG-API 순정 AP 켜기 건너뜀(our hotspot already up, stock AP-on skipped): " sk + 0 "번(HMG-API 로그 전체)"
+      r = ""; for (j = 1; j <= k; j++) r = r (j > 1 ? ", " : "") o[j] " " h[o[j]]
+      print "- HMG-API Android Auto AP 훅: " (r == "" ? "기록 없음" : r) }'
+  _au=$(conf_auth $SRC)
+  echo "- softap.conf 인증 종류 값(카플레이 SSID 다음 정수, 니로 4): ${_au:-읽지 못함}"
+  echo "- 무선 모드 기록: mod.ours $(yn [ -f $BK/mod.ours ]), mod.pin $(yn [ -f $BK/mod.pin ])"
+  # AA 문 3(canStartConnection) 진단: Settings.System androidauto_information(_dr1·_dr2). 값은 영문·숫자 8자까지만
+  _ai=; for _k in androidauto_information androidauto_information_dr1 androidauto_information_dr2; do
+    _v=$(settings get system $_k 2>/dev/null | $BB awk '{ gsub(/[^0-9A-Za-z]/, ""); print substr($0, 1, 8); exit }')
+    _ai="$_ai${_ai:+ / }${_v:-없음}"
+  done
+  echo "- AA 설정값(androidauto_information / _dr1 / _dr2): $_ai"
+  # P-12: Wi-Fi 칩 없음 판정과 순정 기준(module_version 3 = 하드웨어 없음) 근거 한 줄(hotspot.sh wifi_record가 남김)
+  _nr=$($BB grep '^판정 근거: ' $NOCHIP_LOG $BK/nochip-wifi.txt 2>/dev/null | $BB awk '{ sub(/^[^:]*nochip-wifi\.txt:/, ""); l = $0 } END { print l }')
+  echo "- Wi-Fi 칩 없음 기록(wifi.nochip): $(yn [ -f $BK/wifi.nochip ]), 다시 확인함(nochip.rechk): $(yn [ -f $BK/nochip.rechk ]), ${_nr:-판정 근거: 기록 없음}"
+}
+
 report() {
   prod=$(getprop ro.build.product)
   echo "# Korea Projection 리포트"
@@ -225,9 +287,16 @@ report() {
   echo "- wireless.projection 설치: $(yn [ -d /data/nemesis/apps/wireless.projection ])"
   echo "- HMG-API 무선 모드: 설치 $(mod_state) / 켜짐 $(mod_on_state) / 무선 카플레이 설정(bridge) $(bridge_state)"
   echo "- 무선 모드 판: 차 $(mod_ver) / 패키지 $MOD_VER"
+  _mh=$(modhooks_state)
+  case "$_mh" in
+    on) echo "- 무선 모드 훅(마지막 부팅 기록): 켜짐" ;;
+    off*) echo "- 무선 모드 훅(마지막 부팅 기록): **안 켜짐** (HMG-API: ${_mh#off })" ;;
+    *) echo "- 무선 모드 훅(마지막 부팅 기록): 기록 없음" ;;
+  esac
   if mod_pending; then
     echo ""
-    echo "**무선 모드가 아직 새 판($MOD_VER)으로 바뀌지 않았습니다.** 내비가 켜지고 약 2분 뒤 자동으로 바꿉니다. 그다음 내비를 재부팅하고 리포트를 다시 만들어 주세요."
+    # 1.7.2(P-18): 할 일로 쓴다. 바꾸기는 부팅 2분 뒤(서비스가 다시 시작돼도 부팅 기준)에 돈다(#60 K3).
+    echo "**할 일: 내비를 재부팅하고 3분 기다린 뒤 한 번 더 재부팅해 주세요.** 그러면 무선 모드가 새 판($MOD_VER)으로 바뀌니, 리포트를 다시 만들어 주세요."
     echo ""
   fi
   mod_foreign && echo "  - 이 모드는 한국 차용이 아닙니다(Korea Projection이 넣은 것 아님). HMG-API 앱에서 지우고 적용·재부팅하면 한국 차용 모드 설치를 시도합니다"
@@ -249,7 +318,10 @@ report() {
   echo "## Wi-Fi"
   echo "- Wi-Fi 장치(wlan0): $(yn [ -d /sys/class/net/wlan0 ])"
   echo "- 순정 hostapd: $(yn [ -x /system/bin/hostapd ]), dnsmasq: $(yn [ -x /system/bin/dnsmasq ])"
-  echo "- Wi-Fi 설정(wifi_on): $(settings get global wifi_on 2>/dev/null)"
+  echo "- Wi-Fi 설정(wifi_on): $(settings get global wifi_on 2>/dev/null), 순정 AP 저장값(wifi_ap_on): $(settings get global wifi_ap_on 2>/dev/null)"
+  # 1.7.2(P-7): 서비스가 wifi_ap_on을 1에서 0으로 바꾼 기록(원래 값, 숫자만). 없으면 바꾼 적 없음(또는 되돌림)
+  _apo=$(cat $APON_ORIG 2>/dev/null); case "$_apo" in ''|*[!0-9]*) _apo=없음 ;; esac
+  echo "- 순정 AP 저장값을 우리가 바꿈(wifi_ap_on.orig): $(if [ "$_apo" = 없음 ]; then echo 아니요; else echo "예, 원래 값 $_apo"; fi)"
   parse_conf $SRC
   echo "- softap.conf: $(yn [ -s $SRC ]), 찾은 문자열 ${NS:-0}개, 카플레이 SSID 길이 ${#S2}, 비밀번호 길이 ${#S4}"
   echo "- 우리 hostapd: $(yn running "hostapd $CONF"), 우리 DHCP: $(yn our_dhcp_on)"
@@ -260,7 +332,9 @@ report() {
   echo "- wpa_supplicant: $(yn running wpa_supplicant)"
   echo "- 지금 카플레이 연결 수: $(cp_count)"
   if [ -f $AAOFF ]; then _aas="꺼짐(USB kp-aa-off로 끔)"; else _aas="켜짐(기본)"; fi
-  echo "- 무선 안드로이드 오토: $_aas, 모드에 알린 신호 $(getprop $AAPROP 2>/dev/null)"
+  echo "- 무선 안드로이드 오토: $_aas, 모드에 알린 신호 $(getprop $AAPROP 2>/dev/null) (이유: $(_aw=$(cat $AAWHY 2>/dev/null); if [ -n "$_aw" ]; then aa_why_text $_aw; else echo 기록 없음; fi))"
+  echo
+  diag
   echo
   echo "## 순정 파일 체크섬 (새 차 추가용)"
   echo "무선 모드의 패치 세트(patches/<차>/stock)를 만드는 데 씁니다. 차종·펌웨어마다 같은 값이라 개인정보가 아닙니다."
@@ -281,12 +355,15 @@ report() {
   elif [ -f $_fx ]; then set -- $($BB md5sum < $_fx); echo "featurexml.cfg $1 (모드가 바꿨을 수 있음)"; else echo "featurexml.cfg 없음"; fi
   echo '```'
   echo
-  L=/data/nemesis/logs/korea.projection/ap.log
+  L=$APLOG
   # 1.5.6: 5GHz 연결이 얼마나 유지되는지 보려고 Wi-Fi·카플레이 연결 기록만 따로 모아 보인다(기기 주소 없음)
-  echo "## Wi-Fi·카플레이 연결 기록 (ap.log에서, 마지막 40줄)"
+  # 1.7.2(P-17): 이번 부팅(또는 이번 설치) 뒤의 줄만: 서비스가 첫 시작 때 남기는 "$SVC_MARK" 줄 뒤만 본다.
+  # 그 줄이 없으면(업데이트 전 기록뿐) 아무 줄도 보이지 않는다. ap.log.1(크기 제한으로 민 앞부분)도 이어서 본다.
+  echo "## Wi-Fi·카플레이 연결 기록 (ap.log에서, 이번 부팅·설치 뒤, 마지막 40줄)"
   echo "- 지금 핫스팟 채널: $($BB awk -F= '$1 == "channel" { c = $2 } $1 == "hw_mode" { m = $2 } END { print (c == "" ? "알 수 없음" : c " (hw_mode=" m ")") }' $CONF 2>/dev/null || echo 알 수 없음) (설정 파일 값, 실제 채널은 아래 'AP 채널' 줄)"
   echo '```'
-  [ -f $L ] && $BB grep -E 'Wi-Fi: |카플레이 연결 [0-9]|hostapd 시작' $L 2>/dev/null | $BB awk '{ l[NR % 40] = $0 } END { s = NR > 40 ? NR - 39 : 1; for (i = s; i <= NR; i++) print l[i % 40] }'
+  [ -f $L ] && $BB cat $L.1 $L 2>/dev/null | $BB grep -E "Wi-Fi: |카플레이 연결 [0-9]|hostapd 시작|$SVC_MARK" \
+    | $BB awk -v m="$SVC_MARK" -v r="$([ -f $L.1 ] && echo 1)" 'index($0, m) > 0 { n = 0; f = 1; next } { n++; l[n % 40] = $0 } END { if (!f) { if (r == 1 && n > 0) print "(이번 부팅 표시 줄이 기록 회전으로 밀려남: 마지막 줄들)"; else exit } s = n > 40 ? n - 39 : 1; for (i = s; i <= n; i++) print l[i % 40] }'
   echo '```'
   echo
   echo "## 서비스 로그 (ap.log 마지막 20줄)"
@@ -316,6 +393,16 @@ bridge_state() { if $BB grep -q '"bridge" *: *false' $HMGSET 2>/dev/null; then e
 # 이번 부팅의 줄을 놓치면 지난 부팅 기록일 수 있다(HMG-API 로그는 logcat에서 옮겨 적는다).
 # map-check.json은 HMG-API 업데이트로 지도가 바뀌어도 ok로 남을 수 있어 로그를 본다.
 HMGLOG=${HMGLOG:-/data/hmgapi/logs/hmgapi}
+# 1.7.2: 무선 모드의 훅이 실제로 켜졌는가. HMG-API는 모드가 선언한 훅 지점이 하나라도 그 차 지도에 없으면 그 모드의 훅을
+# 통째로 끄고 "mods: wireless-carplay-aa not loaded: <이유>"를 남긴다(스포티지 NQ5 260604 #46: 메뉴용 지점이 없어 무선
+# 카플레이까지 꺼짐). 켜지면 "mods: loaded wireless-carplay-aa <판>". 두 로그 파일에서 마지막 줄로 판단한다.
+# 출력: "on", "off <이유>", 또는 빈 값(기록 없음). 이유는 HMG-API가 남긴 영문 그대로(지점 이름뿐, 개인정보 없음), 200자까지.
+modhooks_state() {
+  $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | $BB awk -v id="$MOD_ID" '
+    index($0, "mods: loaded " id " ") > 0 { s = "on"; w = "" }
+    index($0, "mods: " id " not loaded") > 0 { s = "off"; w = $0; if (index(w, "not loaded: ") > 0 || index(w, "not loaded live: ") > 0) sub(/.*not loaded( live)?: */, "", w); else w = "(예외, 자세한 이유는 HMG-API 로그)" }
+    END { if (s == "off") print "off " substr(w, 1, 200); else print s }'
+}
 hooks_state() {
   $BB cat $HMGLOG/log.log.1 $HMGLOG/log.log 2>/dev/null | $BB awk '
     /hook map: .*, hooks on/ { s = "on"; i = index($0, "hook map: "); w = substr($0, i + 10); sub(/[ ,].*/, "", w) }
@@ -340,6 +427,7 @@ status_kv() {
   echo "mod=$(mod_state)"
   echo "modver=$(mod_ver)"
   echo "mod_pending=$(yesno mod_pending)"
+  _mh=$(modhooks_state); echo "mod_hooks=${_mh%% *}"
   echo "mod_foreign=$(yesno mod_foreign)"
   echo "mod_on=$(mod_on_state)"
   echo "bridge=$(bridge_state)"
@@ -413,17 +501,18 @@ _collect() {
     # 마운트 지점 폴더는 USB가 없어도 있을 수 있다: /proc/mounts로 확인
     # 제보 자료는 USB의 한 폴더($RDIR)에 정해진 이름으로 둔다: 1-report.md, 2-car-report.json(carreport.sh), 3-log.txt
     # 예전 Launch의 2-car-report.json·4번은 지운다(새 파일과 섞이지 않게)
-    $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB mkdir -p "$u/$RDIR" && $BB rm -f "$u/$RDIR/2-car-report.json" "$u/$RDIR/4-debug-private.txt" \
+    # 1.7.1까지 제보 폴더에 두던 4-debug-private.txt도 지운다(1.7.2부터는 $PDIR에 둔다)
+    $BB grep -q " $u " /proc/mounts 2>/dev/null && $BB mkdir -p "$u/$RDIR" && $BB rm -f "$u/$RDIR/2-car-report.json" "$u/$RDIR/4-debug-private.txt" "$u/$PDIR/4-debug-private.txt" \
       && $BB cp $R "$u/$RDIR/1-report.md" 2>/dev/null && $BB cp $G "$u/$RDIR/3-log.txt" 2>/dev/null && sync && where=$u && break
   done
   if [ -z "$where" ]; then
     rprog 100 fail "USB에 저장하지 못했습니다(USB가 빠졌거나 쓸 수 없음). USB를 다시 꽂고 Launch를 눌러 주세요."
     return 0
   fi
-  # 1.7.0: 디버그 로그를 켠 차만 4-debug-private.txt(비공개)를 따로 둔다
+  # 1.7.0: 디버그 로그를 켠 차만 4-debug-private.txt(비공개)를 따로 둔다. 1.7.2: 제보 폴더가 아닌 $PDIR에.
   if [ -f $W/cp.log ] && echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1; then
     rprog 80 run "디버그 로그를 저장하는 중입니다"
-    privlog > "$where/$RDIR/4-debug-private.txt" 2>/dev/null; sync
+    $BB mkdir -p "$where/$PDIR" && privlog > "$where/$PDIR/4-debug-private.txt" 2>/dev/null; sync
   fi
   # HMG-API Car Report도 같은 폴더에 저장한다(1분쯤). 1.7.0: 늘 만든다(#41). 결과(완료·실패)는 carreport.sh가 RPROG에 쓴다.
   if command -v hmgapid >/dev/null 2>&1 && [ -f $APP/bin/carreport.sh ]; then

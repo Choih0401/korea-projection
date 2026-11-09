@@ -37,6 +37,22 @@ result() {
       "$(cat $BOOT_ID 2>/dev/null)" > $RPROG.tmp && $BB chmod 644 $RPROG.tmp && $BB mv -f $RPROG.tmp $RPROG ) 2>/dev/null
 }
 
+# 1.7.2(P-19): 제보 폴더 사본(2-car-report.json)은 공개 이슈에 올라가므로 IPv4 주소를 x.x.x.x로 가린다
+# (모뎀 주소·텔레매틱스 서버 등). HMG-API가 반만 가린 꼴(a.b.x.x)도 다 가린다. 원본(HMG-API reports 폴더)은
+# HMG-API 것이라 그대로 둔다. 가리기가 안 되면(awk 실패, 빈 결과) 사본을 만들지 않는다.
+# HMG-API가 IPv6 앞부분만 지운 IPv4 매핑 주소(::ffff:a.b.c.d → [removed].b.c.d)의 뒤 세 칸도 지우고, MAC도 지운다(리뷰).
+ipmask() {
+  $BB awk '{ gsub(/[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/, "x.x.x.x")
+    gsub(/[0-9][0-9]*\.[0-9][0-9]*\.x\.x/, "x.x.x.x")
+    gsub(/[[]removed[]]\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/, "[removed]")
+    gsub(/[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]/, "xx:xx:xx:xx:xx:xx")
+    print }' "$1"
+}
+# 가린 결과에 숫자 IPv4가 남았으면(이 busybox의 awk가 다르게 동작) 쓰지 않는다
+ipleft() {
+  $BB grep -q '[0-9][0-9]*[.][0-9][0-9]*[.][0-9][0-9]*[.][0-9][0-9]*' "$1"
+}
+
 L=$W/carreport.lock
 lock_alive() {
   _l=$(cat $L/pid 2>/dev/null)
@@ -62,7 +78,7 @@ done
 wait $p 2>/dev/null
 rc=$?
 sync
-ok=0; copied=0
+ok=0; copied=0; maskfail=0
 if [ $rc = 0 ]; then
   while IFS= read -r _x; do
     case "$_x" in
@@ -71,7 +87,16 @@ if [ $rc = 0 ]; then
         $BB grep -q " $_m " $MOUNTS 2>/dev/null || continue
         ok=1
         # 사용자가 한 폴더만 첨부하면 되게, 리포트를 제보 폴더에 정해진 이름(2-car-report.json)으로도 복사한다
-        $BB mkdir -p "$_m/$RDIR" && $BB cp "$_f" "$_m/$RDIR/2-car-report.json" 2>/dev/null && copied=1 ;;
+        _o="$_m/$RDIR/2-car-report.json"
+        if ! $BB mkdir -p "$_m/$RDIR" 2>/dev/null; then
+          :
+        elif ipmask "$_f" > "$_o.tmp" 2>/dev/null && [ -s "$_o.tmp" ] && ! ipleft "$_o.tmp" && $BB mv -f "$_o.tmp" "$_o" 2>/dev/null; then
+          copied=1
+        else
+          # 가리지 못한 사본도, 예전(1.7.1 이하가 가리지 않고 만든) 사본도 남기지 않는다
+          $BB rm -f "$_o.tmp" "$_o" 2>/dev/null
+          maskfail=1
+        fi ;;
     esac
   done < $W/carreport.txt
 fi
@@ -79,6 +104,9 @@ fi
 sync
 if [ $ok = 1 ] && [ $copied = 1 ]; then
   result done "완료: 제보 자료를 모두 저장했습니다(USB의 $RDIR 폴더). 이제 USB를 빼셔도 됩니다."
+elif [ $ok = 1 ] && [ $maskfail = 1 ]; then
+  # 원본에는 IP가 남아 있으므로 공개 이슈에 붙이라고 안내하지 않는다(리뷰)
+  result done "완료: Car Report는 IP를 가리지 못해 제보 폴더에 넣지 않았습니다(공개 이슈에 올리지 마세요). 이제 USB를 빼셔도 됩니다."
 elif [ $ok = 1 ]; then
   result done "완료: 제보 자료를 저장했습니다. Car Report는 USB의 'HMG-API reports' 폴더에 있습니다. 이제 USB를 빼셔도 됩니다."
 else

@@ -67,7 +67,7 @@
 ## 3단계: 설치 파일 받기
 
 1. [최신 릴리스 페이지](https://github.com/StopDragon/korea-projection/releases/latest)를 엽니다.
-2. 아래 **Assets**에서 **`korea-projection-버전-usb.zip`**을 받습니다(예: `korea-projection-1.7.1-usb.zip`).
+2. 아래 **Assets**에서 **`korea-projection-버전-usb.zip`**을 받습니다(예: `korea-projection-1.7.2-usb.zip`).
 
 | 파일 | 누가 받나요 |
 |---|---|
@@ -98,8 +98,8 @@ USB를 열었을 때 **`NEMESIS.data`와 `packages` 폴더가 바로 보여야**
 
 | 잘못된 모양 | 왜 안 되나요 |
 |---|---|
-| `USB/korea-projection-1.7.1-usb/NEMESIS.data` | 폴더째로 넣었습니다. 차는 USB **맨 위**의 `NEMESIS.data`만 찾습니다 |
-| `USB/korea-projection-1.7.1-usb.zip` | 압축을 풀지 않았습니다 |
+| `USB/korea-projection-1.7.2-usb/NEMESIS.data` | 폴더째로 넣었습니다. 차는 USB **맨 위**의 `NEMESIS.data`만 찾습니다 |
+| `USB/korea-projection-1.7.2-usb.zip` | 압축을 풀지 않았습니다 |
 | `USB/packages/korea.projection/NEMESIS.data …` | 안쪽 `korea.projection.zip`까지 풀었습니다. 이 파일은 **zip 그대로** 있어야 합니다 |
 | `USB/korea.projection.zip` (packages 폴더 없음) | 차는 `packages/korea.projection.zip` 위치에서 찾습니다 |
 | `USB/NEMESIS.data.txt` | 이름 끝에 `.txt`가 붙었습니다. 받은 파일을 그대로 쓰세요 |

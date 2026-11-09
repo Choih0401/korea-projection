@@ -36,6 +36,8 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
     static final String RPROG = "/data/local/tmp/korea-projection-report-progress.txt";
     /** 1.7.1: svc/hotspot.sh notice가 쓰는 알림 기록(644, 토스트 대신). 이번 부팅의 줄만 보인다 */
     static final String NOTICE = "/data/local/tmp/korea-projection-notice.txt";
+    /** 1.7.2: svc/hotspot.sh hint_write가 쓰는 상태 안내(644, 코드와 시각뿐). 이번 부팅의 것만 보인다 */
+    static final String HINT = "/data/local/tmp/korea-projection-hint.txt";
     /** 알림을 보여 주는 시간(초): 그보다 오래된 안내는 지난 단계의 것이다 */
     static final long NOTICE_SHOW = 1800;
     /** 저장이 끝난 기록을 결과 화면에 보여 주는 시간(초): 그보다 오래된 완료 기록은 지난 Launch의 것이다 */
@@ -300,8 +302,20 @@ public class StatusActivity extends Activity implements View.OnClickListener, Ru
         vp.bottomMargin = dp(8);
         left.addView(verdict, vp);
 
+        // 1.7.2: 서비스가 정한 상태 안내(무선 AA 준비됨·폰 블루투스 다시 켜기·아이폰 Wi-Fi·설정 바뀜). 화면을 열 때 읽는다
+        for (String[] h : Report.hints(read(HINT), boot, System.currentTimeMillis() / 1000)) {
+            String msg = h[1] + (h[2].isEmpty() ? "" : " (" + clock(h[2]) + ")");
+            boolean good = "0".equals(h[0]);
+            TextView ht = text(msg, 17, good ? Color.WHITE : Color.BLACK);
+            ht.setBackgroundColor(good ? GOOD : WARN);
+            ht.setPadding(dp(10), dp(4), dp(10), dp(4));
+            LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
+            hp.bottomMargin = dp(4);
+            left.addView(ht, hp);
+        }
+
         // 1.7.1: 알림(토스트 대신): 이번 부팅의 최근 3개, 새것이 위
-        for (String[] n : Report.notices(read(NOTICE), boot, 3, System.currentTimeMillis() / 1000, NOTICE_SHOW)) {
+        for (String[] n: Report.notices(read(NOTICE), boot, 3, System.currentTimeMillis() / 1000, NOTICE_SHOW)) {
             TextView nt = text("알림 " + clock(n[0]) + "  " + n[1], 16, Color.BLACK);
             nt.setBackgroundColor(0xFFFFE082);
             nt.setPadding(dp(10), dp(4), dp(10), dp(4));

@@ -162,6 +162,79 @@ CONFEOF
   $BB chown 1000:1010 $CONF; $BB chmod 660 $CONF
 }
 
+# --- 1.7.2(P-3): softap.conf가 바뀌면 hostapd를 새 값으로 다시 띄운다 ---
+# 순정 "키 생성"(PhoneProjection 무선 설정 화면, WifiApConfigStore.renewPasskey)은 카플레이 SSID와 비밀번호를 둘 다 새로 만든다.
+# 그 뒤 아이폰·안드로이드 폰은 새 값을 받는데 우리 hostapd는 옛 값을 써서 붙지 못한다. 그래서 30초 점검에서 파일 서명(md5,
+# 못 구하면 크기·시각)을 보고, 카플레이 SSID·비밀번호가 실제로 바뀌었을 때만 다시 띄운다(다시 띄우면 약 20초 끊김).
+# 카플레이가 연결되어 있으면(cp_count>0) 끊지 않고 미룬다: 상태 화면에 짧게 알리고, 연결이 끝난 뒤 첫 점검에서 다시 띄운다.
+# 순정 AP 경로(stock_ap_mode)는 부르지 않는다. 로그에는 길이만 남긴다. 끝나는 조건: 30초 점검 안에서만 돈다(반복 작업 없음).
+# 알려진 한계: 안드로이드 오토 연결은 세지 않는다(cp_count는 카플레이 포트만 본다).
+conf_sig() {
+  _cs=$($BB md5sum < "$1" 2>/dev/null) && [ -n "$_cs" ] && { echo "${_cs%% *}"; return 0; }
+  $BB ls -ln "$1" 2>/dev/null | $BB awk '{ print $5, $6, $7, $8 }'
+}
+# 우리 hostapd만 멈추고(최대 약 5초 기다림) up이 새 설정으로 다시 띄우게 한다
+restart_hostapd() {
+  for p in $($PS | $BB grep -v grep | $BB grep "hostapd $CONF" | $BB awk '{print $1}'); do kill $p 2>/dev/null; done
+  _rw=0
+  while running "hostapd $CONF" && [ $_rw -lt 5 ]; do sleep 1; _rw=$((_rw+1)); done
+  up
+}
+conf_tick() {
+  _ns=$(conf_sig $SRC)
+  [ -n "$_ns" ] && [ "$_ns" != "$CONF_SIG" ] || return 0
+  # 리뷰 M-4: 이미 미뤄 둔 같은 변경이면 연결이 끝날 때까지 다시 읽지 않는다(parse_conf는 바이트마다 프로세스를 띄워 무겁다)
+  [ "$HC" = wait ] && [ "$_ns" = "$CONF_WAIT_SIG" ] && [ "$(cp_count)" != 0 ] && return 0
+  _o1=$S1; _o2=$S2; _o3=$S3; _o4=$S4; _on=$NS
+  parse_conf $SRC
+  # 리뷰 L-1: hostapd SSID는 32바이트, WPA 비밀번호는 63자까지다. 넘으면 띄울 수 없으므로 읽지 못한 것과 같이 다룬다
+  if [ "${NS:-0}" -lt 4 ] || [ ${#S2} -lt 1 ] || [ ${#S2} -gt 32 ] || [ ${#S4} -lt 8 ] || [ ${#S4} -gt 63 ]; then
+    # 쓰는 중이었거나 형식이 다르면 지금 설정을 그대로 둔다. 같은 서명은 다시 보지 않는다(다음에 바뀌면 다시 읽음)
+    S1=$_o1; S2=$_o2; S3=$_o3; S4=$_o4; NS=$_on; CONF_SIG=$_ns
+    log "softap.conf가 바뀌었지만 문자열 4개를 읽지 못함: 지금 핫스팟 설정을 그대로 둠"
+    return 0
+  fi
+  if [ "$S2" = "$_o2" ] && [ "$S4" = "$_o4" ]; then
+    CONF_SIG=$_ns
+    [ -n "$HC" ] && { HC=; HC_T=; hint_write; }
+    return 0
+  fi
+  if [ "$(cp_count)" != 0 ]; then
+    # 연결 중: 새 값은 기억만 하고 지금 설정은 그대로(다음 점검에서 다시 비교). 안내·로그는 한 번만
+    S1=$_o1; S2=$_o2; S3=$_o3; S4=$_o4; NS=$_on; CONF_WAIT_SIG=$_ns
+    if [ "$HC" != wait ]; then
+      HC=wait; HC_T=$(date +%s); hint_write
+      log "softap.conf의 카플레이 Wi-Fi 설정이 바뀜: 카플레이가 연결되어 있어 연결이 끝나면 핫스팟을 다시 시작함"
+    fi
+    return 0
+  fi
+  CONF_SIG=$_ns
+  log "softap.conf의 카플레이 Wi-Fi 설정이 바뀜(SSID 길이 ${#_o2}→${#S2}, 비밀번호 길이 ${#_o4}→${#S4}): 핫스팟을 새 설정으로 다시 시작"
+  write_conf
+  restart_hostapd
+  [ -n "$HC" ] && { HC=; HC_T=; hint_write; }
+  return 0
+}
+# 1.7.2(P-8): softap.conf에서 카플레이 SSID 뒤의 정수(키 관리 값으로 보임, 니로 4=WPA2_PSK)만 숫자로 낸다. 문자열은 내지 않는다.
+# 형식 3: int 버전, UTF S1, UTF S2, int(이 값), … (drafts/stock-re/carplay-connection.md 3.2). 못 읽으면 빈 값.
+conf_auth() {
+  [ -s "$1" ] || return 0
+  set -- $(for _t in $($BB od -b -v "$1"); do [ ${#_t} -eq 3 ] && echo $_t; done)
+  _ca=0; _cn=$#; _ci=0
+  for _t in "$@"; do eval "_cb$_ci=$(o2d $_t)"; _ci=$((_ci+1)); [ $_ci -ge 200 ] && break; done
+  _ci=4
+  for _k in 1 2; do
+    [ $((_ci+1)) -lt $_cn ] || return 0
+    eval "_L=\$(( _cb$_ci*256 + _cb$((_ci+1)) ))"
+    [ $_L -le 63 ] || return 0
+    _ci=$((_ci+2+_L))
+  done
+  [ $((_ci+3)) -lt $_cn ] && [ $((_ci+3)) -lt 200 ] || return 0
+  eval "_h=\$_cb$_ci"
+  [ $_h -le 127 ] || return 0
+  eval "echo \$(( _cb$_ci*16777216 + _cb$((_ci+1))*65536 + _cb$((_ci+2))*256 + _cb$((_ci+3)) ))"
+}
+
 # a live process by name; a zombie ([hostapd], state Z) doesn't count
 running() { $PS | $BB grep -v grep | $BB grep -v " Z " | $BB grep -q "$1"; }
 # 우리 것이 아닌 hostapd(순정 핫스팟)가 살아 있는가: 우리 것은 설정 파일 경로($CONF)로 가린다
@@ -247,6 +320,10 @@ wifi_record() {
     echo "wifi_on=$(settings get global wifi_on 2>/dev/null) wlan.driver.status=$(getprop wlan.driver.status 2>/dev/null) init.svc.wpa_supplicant=$(getprop init.svc.wpa_supplicant 2>/dev/null)"
     echo "wpa_supplicant.conf: $($BB ls -ln /data/misc/wifi/wpa_supplicant.conf 2>/dev/null | $BB awk '{ print $1, $3 ":" $4 }')"
     echo "net: $($BB ls /sys/class/net 2>/dev/null | $BB awk '{ printf "%s ", $0 }')"
+    # 1.7.2(P-12): 순정 판정 기준 한 줄. 순정 WifiService.checkAndStartWifi는 module_version이 3이면 Wi-Fi 하드웨어가 없다고 본다
+    # (#50 부품 없음 3, #48·니로 부품 있음 1). 숫자만 꺼낸다. 리포트(status.sh)가 이 줄을 "판정 근거"로 옮긴다.
+    _mv=$(logcat -d -v time 2>/dev/null | $BB grep 'wifi_get_module_version:' | $BB awk '{ v = $NF } END { gsub(/[^0-9]/, "", v); print v }')
+    echo "판정 근거: 순정 module_version=${_mv:-없음} (3이면 순정 Wi-Fi 서비스도 Wi-Fi 하드웨어가 없다고 봄, 1이면 부품 있음)"
     echo "## logcat (순정 Wi-Fi, 마지막 200줄)"
     if echo x | $BB awk "$KPMASK" >/dev/null 2>&1; then
       logcat -d -v time 2>/dev/null | $BB grep -E "$WLTAGS" | $BB awk -v n=200 'BEGIN { n = n + 0 } { a[NR % n] = $0 } END { s = NR > n ? NR - n + 1 : 1; for (i = s; i <= NR; i++) print a[i % n] }' | $BB awk "$KPMASK"
@@ -307,24 +384,143 @@ stop_ours() {
   return 0
 }
 stop_ap() {
-  aa_sig 0
+  aa_sig 0 stop
   stop_ours
   killlog
 }
-# AA 신호를 맞춘다. 인자가 있으면 그 값(0)으로, 없으면 켜기 파일·우리 hostapd로 정한다. 바뀔 때만 setprop·로그.
-# 값만 쓰고 SSID·비밀번호는 쓰지 않는다. 순정 AP 경로(tcc803x)는 이 함수를 부르지 않는다(순정이 이미 AP를 안다).
+# AA 신호를 맞춘다. 인자가 있으면 그 값(0)으로, 없으면 켜기 파일·우리 hostapd·wlan0 주소·순정 AP 기록으로 정한다.
+# 바뀔 때만 setprop·로그. 값만 쓰고 SSID·비밀번호는 쓰지 않는다. 순정 AP 경로(tcc803x)는 이 함수를 부르지 않는다(순정이 이미 AP를 안다).
+# 1.7.2(P-6): 예전의 "함께 넣은 busybox(BB_OWN)면 끔" 조건을 뺐다. 실제 뜻은 "busybox 없는 차 전부"라, 순정 AP를 쓰지 않는
+# 그런 차에서 AA가 늘 막혔다. 원래 의도(tcc803x에서 순정이 AP를 켜고 끌 때 훅이 막지 않게)는 이렇게 지킨다:
+# - 순정 카플레이 AP를 본 차($BK/stockap.seen)는 그대로 0(순정 AP 경로 차는 신호를 켜지 않음)
+# - 다른 hostapd가 돌면 ap_yield가 0으로 내림(다음 30초 점검 전까지 1로 남는 틈은 있음, 보고서 참고)
+# - 새 조건: wlan0에 우리 AP 주소가 있어야 1(GPM은 wlan0의 사설 IPv4를 못 찾으면 그 시도를 재시도 없이 끝낸다)
+# 이유는 $W/aa.why에 두고(리포트가 읽음), 신호가 바뀔 때만 이유와 함께 로그 한 줄을 남긴다. $2: 0으로 둘 때의 이유.
+AAWHY=${AAWHY:-$W/aa.why}
+aa_why_text() {
+  case "$1" in
+    on) echo "켜짐" ;; off) echo "끄기 파일(kp-aa-off)" ;; stockap) echo "순정 카플레이 AP 기록(stockap.seen)" ;;
+    nohostapd) echo "우리 hostapd 없음" ;; noaddr) echo "wlan0에 우리 AP 주소 없음" ;; yield) echo "다른 hostapd에 비켜 줌" ;;
+    *) echo "핫스팟 멈춤" ;;
+  esac
+}
+# wlan0에 우리 AP 주소($AP_IP)가 있는가(ifconfig의 inet addr)
+wlan_has_ip() {
+  [ "$($BB ifconfig wlan0 2>/dev/null | $BB awk '/inet addr:/ { a = $0; sub(/.*inet addr:/, "", a); sub(/ .*/, "", a); print a; exit }')" = "$AP_IP" ]
+}
 aa_sig() {
-  _a=${1:-}
+  _a=${1:-}; _why=${2:-stop}
   if [ -z "$_a" ]; then
-    _a=0; [ ! -f $AAOFF ] && running "hostapd $CONF" && _a=1
-    # tcc803x(함께 넣은 busybox)·순정 카플레이 AP를 본 차는 순정이 AP를 켜고 끈다: 훅이 그 요청을 막지 않게 켜지 않는다(리뷰 L1)
-    { [ "$BB" = "$BB_OWN" ] || [ -f $BK/stockap.seen ]; } && _a=0
+    _a=0
+    if [ -f $AAOFF ]; then _why=off
+    elif [ -f $BK/stockap.seen ]; then _why=stockap
+    elif ! running "hostapd $CONF"; then _why=nohostapd
+    elif ! wlan_has_ip; then _why=noaddr
+    else _a=1; _why=on; fi
   fi
-  [ "$_a" = "$(getprop $AAPROP 2>/dev/null)" ] && return 0
+  [ "$_why" = "$(cat $AAWHY 2>/dev/null)" ] || echo "$_why" > $AAWHY 2>/dev/null
+  if [ "$_a" = "$(getprop $AAPROP 2>/dev/null)" ]; then
+    # 리뷰 M-2: Launch(kp-aa-off)가 신호를 먼저 내렸으면 속성은 이미 0이다. 서비스에 남은 "준비됨" 안내도 지운다.
+    if [ "$_a" = 0 ] && [ -n "$HA_READY$HA" ]; then AA_ON_TM=; HA_READY=; HA=; HA_T=; hint_write; fi
+    return 0
+  fi
   # 처음(속성 없음)에 0이면 조용히 둔다
   [ "$_a" = 0 ] && [ -z "$(getprop $AAPROP 2>/dev/null)" ] && return 0
   setprop $AAPROP $_a 2>/dev/null
-  if [ $_a = 1 ]; then log "무선 안드로이드 오토(시험) 켜짐: 모드에 우리 AP를 알림"; else log "무선 안드로이드 오토(시험) 신호 끔"; fi
+  if [ $_a = 1 ]; then
+    log "무선 안드로이드 오토(시험) 켜짐: 모드에 우리 AP를 알림"
+    # P-4: 상태 화면 "준비됨" 시각과, logcat의 "AP 모드 모름"이 신호보다 먼저였는지 가르는 기준 시각
+    AA_ON_TM=$(date '+%m-%d %H:%M:%S'); HA_READY=$(date +%s)
+  else
+    log "무선 안드로이드 오토(시험) 신호 끔: 이유 $(aa_why_text $_why)"
+    AA_ON_TM=; HA_READY=; HA=; HA_T=
+  fi
+  hint_write
+  return 0
+}
+
+# --- 1.7.2 상태 화면 안내(P-3·P-4·P-5) ---
+# 서비스가 30초 점검에서 정한 짧은 안내를 상태 화면 앱(QR 화면)이 읽는 파일에 둔다(644, key=value, 비밀값 없음).
+# 토스트는 쓰지 않는다(CLAUDE.md). 값은 코드와 시각(초)뿐이고 문구는 앱이 정한다.
+#   boot: 이번 부팅 id(앱은 지난 부팅 것을 보이지 않음)
+#   aa_ready: 무선 AA 신호가 켜진 시각 / aa: bt(폰 블루투스를 껐다 켜기)·cpwait(카플레이가 연결되어 AA는 기다림)·ok(AA 연결됨), aa_t
+#   iph: wifi(아이폰이 Wi-Fi에 오지 않음), iph_t / conf: wait(softap.conf가 바뀌어 카플레이 연결이 끝나면 다시 시작), conf_t
+# 쓰는 곳은 서비스(main)뿐이다(HINT_ON=1). Launch(status.sh)가 aa_sig 0을 불러도 이 파일을 비우지 않는다.
+# 끝나는 조건: aa·iph는 HINT_MAX초(10분) 뒤 또는 해소 줄을 보면 지움(hint_tick), conf는 다시 시작하면 지움.
+HINT=${HINT:-/data/local/tmp/korea-projection-hint.txt}
+HINT_MAX=${HINT_MAX:-600}
+hint_write() {
+  [ "$HINT_ON" = 1 ] || return 0
+  ( umask 022
+    $BB printf 'boot=%s\naa_ready=%s\naa=%s\naa_t=%s\niph=%s\niph_t=%s\nconf=%s\nconf_t=%s\n' \
+      "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" "$HA_READY" "$HA" "$HA_T" "$HI" "$HI_T" "$HC" "$HC_T" > $HINT.tmp \
+      && $BB chmod 644 $HINT.tmp && $BB mv -f $HINT.tmp $HINT ) 2>/dev/null
+  return 0
+}
+# AA 안내 바꾸기: $1 코드(bt|cpwait|ok|빈 값), $2 ap.log에 남길 이유. 같은 값이면 아무것도 하지 않는다.
+aa_hint() {
+  [ "$1" = "$HA" ] && return 0
+  HA=$1
+  if [ -n "$1" ]; then HA_T=$(date +%s); else HA_T=; fi
+  case "$1" in
+    bt) log "안내(상태 화면): 안드로이드 폰의 블루투스를 껐다 켜 주세요 ($2)" ;;
+    cpwait) log "안내(상태 화면): 카플레이가 연결되어 있어 안드로이드 오토는 기다림" ;;
+    ok) log "안내(상태 화면): 무선 안드로이드 오토 연결됨" ;;
+    *) log "안내(상태 화면): 안드로이드 오토 안내 지움 ($2)" ;;
+  esac
+  hint_write
+}
+# aa_events가 넘긴 판정(F 줄) 하나를 처리한다. iap·iapd(아이폰)는 신호와 상관없이, AA 안내는 켜기 파일이 있고 신호가 1인 차만.
+aa_flag() {
+  case "$1" in
+    # 리뷰 M-3: 유선(USB, 구성요소 1) 카플레이 중에도 블루투스 iAP2(구성요소 4)가 붙는다(wired3 로그).
+    # 유선이 붙어 있는 동안에는 아이폰 Wi-Fi 안내를 내지 않는다.
+    iap) [ "$IPH_USB" = 1 ] && return 0
+      case "$2" in ''|*[!0-9]*) ;; *) IPH_AT=$(( $(date +%s) - $2 )) ;; esac; return 0 ;;
+    iapd) IPH_AT=; return 0 ;;
+    usbon) IPH_USB=1; IPH_AT=
+      if [ -n "$HI" ]; then HI=; HI_T=; log "안내(상태 화면) 지움: 아이폰 유선 연결"; hint_write; fi
+      return 0 ;;
+    usboff) IPH_USB=; return 0 ;;
+  esac
+  { [ ! -f $AAOFF ] && [ "$(getprop $AAPROP 2>/dev/null)" = 1 ]; } || return 0
+  case "$1" in
+    unkpre) aa_hint bt "신호보다 먼저 AP 모드를 물음" ;;
+    sppfail) aa_hint bt "헤드유닛 쪽 블루투스 다시 연결 거절" ;;
+    giveup) aa_hint bt "폰 프로젝션이 다시 시도를 포기함" ;;
+    cpwait) aa_hint cpwait ;;
+    ok) aa_hint ok ;;
+    clr) case "$HA" in bt|cpwait) aa_hint "" "AP 켜짐 확인" ;; esac ;;
+  esac
+  return 0
+}
+# 30초마다: 오래된 안내를 지우고(10분), 아이폰 Wi-Fi 미접속을 판정한다(P-5, 우리 AP 경로에서만 부름).
+# 아이폰 판정: iAP2(블루투스, 구성요소 4)가 붙은 뒤 IPH_WAIT초(60초) 동안 우리 AP에 기기 연결(Wi-Fi 인증 끝)이 없고
+# 카플레이 연결도 없으면 안내한다. 시각은 둘 다 로그에 찍힌 실제 시각으로 맞춘다(30초 점검이라 처리가 최대 30초 늦다).
+IPH_WAIT=${IPH_WAIT:-60}
+hint_tick() {
+  _hn=$(date +%s); _hc=$(cat $CPN 2>/dev/null); _hc=${_hc:-0}
+  if [ -n "$HA_T" ] && [ $((_hn - HA_T)) -ge $HINT_MAX ]; then aa_hint "" "10분 지남"; fi
+  # 아이폰 안내: 연결되면 지우고, 10분 지나도 지운다
+  if [ -n "$HI" ]; then
+    if [ "$_hc" != 0 ] || [ "${WCONN_AT:-0}" -ge "${HI_T:-0}" ]; then
+      HI=; HI_T=; log "안내(상태 화면) 지움: 아이폰이 Wi-Fi에 연결됨"; hint_write
+    elif [ $((_hn - HI_T)) -ge $HINT_MAX ]; then
+      HI=; HI_T=; hint_write
+    fi
+  fi
+  if [ -n "$IPH_AT" ]; then
+    if [ "$_hc" != 0 ] || [ "${WCONN_AT:-0}" -ge $((IPH_AT - 5)) ]; then
+      IPH_AT=
+    elif [ $((_hn - IPH_AT)) -ge $IPH_WAIT ]; then
+      IPH_AT=
+      if running "hostapd $CONF"; then
+        HI=wifi; HI_T=$_hn
+        log "안내(상태 화면): 아이폰이 블루투스로 붙은 뒤 ${IPH_WAIT}초 동안 Wi-Fi에 오지 않음(아이폰 Wi-Fi에서 차 네트워크를 지우고 다시 연결)"
+        hint_write
+      fi
+    fi
+  fi
   return 0
 }
 
@@ -334,7 +530,7 @@ aa_sig() {
 ap_yield() {
   if ! car_in "$prod" "$CARS_OK" && stock_ap_on; then
     # 1.7.0: 다른 hostapd가 도는 동안은 우리 AP가 아니므로 AA 신호를 끈다(리뷰 M1, 바뀔 때만 setprop)
-    aa_sig 0
+    aa_sig 0 yield
     # 1.6.2: 순정이 카플레이 AP를 띄웠으면 우리 것을 멈추고 순정 AP 경로로 간다(돌아오지 않음)
     if [ "$(stock_ssid)" = carplay ]; then
       stop_ap; rm -f $W/ap.yield
@@ -477,6 +673,81 @@ wifi_unlock() {
     $BB cp -f $BK/wpacrc.bak $WCRC && $BB chown $_o $WCRC && $BB chmod $_p $WCRC
   fi
 }
+
+# --- 1.7.2(P-7): 순정 AP 저장값(Settings.Global wifi_ap_on) 맞추기 ---
+# 순정 WifiService는 system_server가 뜰 때 wifi_ap_on을 한 번 읽고, BOOT_COMPLETED 뒤(부팅 약 40~46초) 값이 1이면 AP를 켠다.
+# "이미 켜짐" 검사는 프레임워크 자기 상태만 보고 우리 hostapd는 모른다: 니로에서 이 부팅 복구가 우리 핫스팟과 부딪혔다
+# (FINDINGS "연결 장면 로그 분석", V-3, 11-06 10:33·13:25). ACC를 끄면 AP는 꺼지지만 값은 1로 남는다.
+# 순정 쪽에서 막을 수단은 이 값을 0으로 두는 것뿐이고 다음 부팅부터 듣는다(2026-11-09 소유자 결정).
+# 우리 hostapd를 돌리는 차에서만 바꾼다. 바꾸지 않는 차:
+#  - wireless.projection이 설치된 차(그 패키지가 AP를 다룬다)
+#  - 함께 넣은 busybox를 쓰는 내비(tcc803x, K3·K8): 순정이 카플레이 AP를 직접 켤 수 있다(K3 #15). 그 경로가 이 값에
+#    기대는지 모르므로 건드리지 않는다
+#  - 순정 카플레이 AP를 본 차(stockap.seen), Wi-Fi 칩이 없는 차(wifi.nochip)
+#  - 우리 hostapd가 지금 돌지 않을 때(켜지 못한 회차)
+# 원래 값(1)은 한 번만 $BK/wifi_ap_on.orig에 적는다(이미 있으면 덮지 않음: 다시 시작해도 0으로 바뀌지 않게).
+# 서비스가 핫스팟을 켠 뒤 한 번, 그 뒤 10분마다 다시 본다(세션 중 순정 AP 켜기가 1을 다시 쓰면 다음 부팅 전에 0으로).
+# 삭제할 때(preun, 업데이트 때는 아님)만 apon_restore가 되돌린다. 순정 카플레이 AP 경로(stock_ap_mode)로 바꿀 때는 되돌리지
+# 않는다(리뷰 M1): 우리가 0으로 바꾼 뒤 이번 부팅의 순정 복구 AP를 "순정 카플레이 AP"로 본 것일 수 있다. 되돌리면 매 부팅
+# 순정 복구가 AP를 켜 stockap.seen이 낡지 않는다. 그대로 두면 순정 AP를 못 본 부팅이 쌓여 보통 흐름(우리 AP)으로 돌아온다.
+# settings가 없거나 실패하면 로그 한 줄만 남기고 넘어간다(핫스팟 시작을 막지 않음, 같은 실행에서는 한 번만). 로그에는 값(숫자)만 쓴다.
+APON_ORIG=${APON_ORIG:-${BK:-/data/nemesis/backup/korea.projection}/wifi_ap_on.orig}
+# 지금 값(숫자일 때만, 아니면 빈 값: null·오류 줄은 내지 않는다)
+apon_get() { _ag=$(settings get global wifi_ap_on 2>/dev/null); case "$_ag" in ''|*[!0-9]*) ;; *) echo "$_ag" ;; esac; }
+apon_off() {
+  [ -d $WPDIR ] && return 0
+  [ "$BB" = "$BB_OWN" ] && return 0
+  [ -f $BK/stockap.seen ] && return 0
+  [ -f $BK/wifi.nochip ] && return 0
+  running "hostapd $CONF" || return 0
+  if ! command -v settings >/dev/null 2>&1; then
+    [ -z "$APON_TOLD" ] && log "순정 AP 저장값(wifi_ap_on) 맞추기 건너뜀: settings 명령 없음"
+    APON_TOLD=1; return 0
+  fi
+  _av=$(apon_get)
+  case "$_av" in
+    0) return 0 ;;
+    1) ;;
+    # null(한 번도 안 씀)·읽지 못함 등: 순정이 부팅 때 AP를 켜지 않는 값이거나 알 수 없으므로 그대로 둔다
+    *) [ -z "$APON_TOLD" ] && log "순정 AP 저장값(wifi_ap_on) 그대로 둠: 값 ${_av:-없음·읽지 못함}"
+       APON_TOLD=1; return 0 ;;
+  esac
+  $BB mkdir -p ${APON_ORIG%/*}
+  [ -f $APON_ORIG ] || echo 1 > $APON_ORIG
+  settings put global wifi_ap_on 0 >/dev/null 2>&1
+  if [ "$(apon_get)" = 0 ]; then
+    log "순정 AP 저장값(wifi_ap_on) 1 → 0: 다음 부팅부터 순정이 AP를 켜지 않음(원래 값 $(cat $APON_ORIG 2>/dev/null), 삭제할 때 되돌림)"
+  else
+    [ -z "$APON_FAIL" ] && log "순정 AP 저장값(wifi_ap_on)을 0으로 바꾸지 못함(지금 값 $(apon_get))"
+    APON_FAIL=1
+  fi
+  return 0
+}
+# 되돌리기(preun): 기록이 있고 지금 값이 아직 0일 때만(다른 곳에서 바꿨으면 그대로) 원래 값으로. 되돌렸거나 다른 값이면 기록을 지운다.
+# settings가 없거나 실패하면 1(preun이 삭제 출력에 안내하고, 기록은 $BK와 함께 지워진다). busybox 없이 돈다(busybox 없는 내비도 부름).
+apon_restore() {
+  [ -f $APON_ORIG ] || return 0
+  _ao=; read _ao < $APON_ORIG
+  case "$_ao" in 1) ;; *) rm -f $APON_ORIG; return 0 ;; esac
+  if ! command -v settings >/dev/null 2>&1; then
+    log "순정 AP 저장값(wifi_ap_on) 되돌리기 건너뜀: settings 명령 없음"; return 1
+  fi
+  _av=$(apon_get)
+  if [ "$_av" = 0 ]; then
+    settings put global wifi_ap_on $_ao >/dev/null 2>&1
+    if [ "$(apon_get)" = "$_ao" ]; then
+      log "순정 AP 저장값(wifi_ap_on) 되돌림: 0 → $_ao"
+    else
+      log "순정 AP 저장값(wifi_ap_on)을 되돌리지 못함"; return 1
+    fi
+  elif [ -z "$_av" ]; then
+    log "순정 AP 저장값(wifi_ap_on) 되돌리기 건너뜀: 값을 읽지 못함"; return 1
+  else
+    log "순정 AP 저장값(wifi_ap_on) 그대로 둠: 우리가 바꾼 뒤 다른 곳에서 바뀜(지금 값 $_av)"
+  fi
+  rm -f $APON_ORIG
+  return 0
+}
 # 대기만 한다. sleep을 뒤에서 돌리고 wait로 기다려야 TERM이 오면 바로 trap이 돈다(앞에서 돌리면 최대 1시간 늦음).
 # mode=restart: 끝내지 않는다(svcmgr가 죽은 횟수를 세지 않게)
 idle_forever() { while true; do sleep 3600 & wait $!; done; }
@@ -485,6 +756,14 @@ idle_forever() { while true; do sleep 3600 & wait $!; done; }
 # 드라이버만 남는다(약 6초). 그래서 wlan0이 다시 생길 때까지 최대 20초 기다린다.
 take_wlan0() {
   wifi_lock; _lk=$?
+  # 1.7.2(P-11): 같은 부팅에서 서비스만 다시 시작했고(SVC_FIRST=0) 드라이버(wlan0)가 이미 있고 wpa_supplicant가 없고 Wi-Fi 설정이
+  # 켜져 있으면 Wi-Fi 켜기와 대기(약 9초)를 건너뛴다. 설정 파일이 아직 없으면(_lk=1) 예전처럼 켠다(Wi-Fi 서비스가 만들게).
+  # 부팅 뒤 처음 시작·업데이트 뒤 첫 시작($W가 지워짐)은 늘 예전처럼 한다.
+  if [ "${SVC_FIRST:-1}" = 0 ] && [ $_lk != 1 ] && [ -d $WLAN ] && ! running wpa_supplicant \
+      && [ "$(settings get global wifi_on 2>/dev/null)" = 1 ]; then
+    log "같은 부팅에서 다시 시작: Wi-Fi 드라이버(wlan0)가 이미 있어 Wi-Fi 켜기·대기를 건너뜀"
+    return 0
+  fi
   svc wifi enable; sleep $WIFI_WAIT
   [ $_lk = 1 ] && { wifi_lock; _lk=$?; }
   if running wpa_supplicant; then
@@ -509,6 +788,7 @@ setup_pending() {
 # 남기는 것: AP 채널, AP 올라옴, 기기 연결(Wi-Fi 인증 끝)·끊김, 칩 응답 없음. 기기 주소(MAC)는 남기지 않는다.
 # 어디까지 남겼는지는 $W/ktime("<부팅 id> <커널 초>")에 둔다: 재부팅하면 커널 시각이 0부터라 부팅 id가 다르면 처음부터.
 KT=${KT:-$W/ktime}
+UPTIME=${UPTIME:-/proc/uptime}
 CPN=${CPN:-$W/cpn}
 wifi_events() {
   _bid=$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null); _bid=${_bid:-none}
@@ -523,7 +803,7 @@ wifi_events() {
       e = ""
       if (index($0, "target channel(") > 0) { c = $0; sub(/.*target channel\(/, "", c); sub(/\).*/, "", c); e = "AP 채널 " c }
       else if (index($0, "AP/GO Link up") > 0) e = "AP 올라옴"
-      else if (index($0, "M4 of 4way") > 0 && index($0, "[RX]") > 0) e = "기기 연결(Wi-Fi 인증 끝)"
+      else if (index($0, "M4 of 4way") > 0 && index($0, "[RX]") > 0) { e = "기기 연결(Wi-Fi 인증 끝)"; print "C " int(tm) }
       # hostapd가 시작할 때 모든 기기를 비우는 줄(브로드캐스트 주소)은 끊김으로 세지 않는다
       else if (index($0, "Disconnect STA") > 0) { if (index(tolower($0), "ff:ff:ff:ff:ff:ff") == 0) e = "기기 연결 끊김" }
       else if (index($0, "HANG") > 0 && index($0, "CHANGE") == 0) e = "Wi-Fi 칩 응답 없음(HANG)"
@@ -535,6 +815,10 @@ wifi_events() {
   while IFS= read -r _l; do
     case "$_l" in
       "E "*) log "${_l#E }" ;;
+      # 1.7.2(P-5): 마지막 기기 연결의 실제 시각(초). 커널 시각을 지금 시각으로 옮긴다(부팅 뒤 초를 못 읽으면 지금으로 봄)
+      "C "*) _kc=${_l#C }; _ku=$($BB awk '{ print int($1) }' $UPTIME 2>/dev/null)
+        case "$_kc" in ''|*[!0-9]*) _ku= ;; esac
+        case "$_ku" in ''|*[!0-9]*) WCONN_AT=$(date +%s) ;; *) WCONN_AT=$(( $(date +%s) - _ku + _kc )) ;; esac ;;
       "T "*) echo "$_bid ${_l#T }" > $KT ;;
     esac
   done < $W/kev
@@ -553,33 +837,71 @@ aa_events() {
   _bid=$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null); _bid=${_bid:-none}
   _last=
   if [ -f $AAT ]; then read _ab _al _am < $AAT; [ "$_ab" = "$_bid" ] && _last="$_al $_am"; fi
-  logcat -d -v time 2>/dev/null | $BB grep -E ' [VDIWEF]/(AAProjection|PhoneProjection) *\(' \
-    | $BB grep -E 'START_SPP_CONNECT_FOR_CONNECTIVITY|Sent WifiVersionRequest|wirelessSupported = |getWiFiApMode|isWifiApEnable = |Sent start request|MSG_WIFI_TRANSPORT_INIT retu|ACTION_WIRELESS_SPP_CONNECT_TIMEOUT|==> rfcommDisconnect|Already AA' \
-    | $BB awk -v last="$_last" -v max="$AAEV_MAX" '
+  # 1.7.2(P-4·P-5): 자동 연결 실패 신호와 해소 줄(connection-timeline-aa.md 0장 9번, 문 3), 아이폰 iAP2 연결(HMG-API 브리지)도 본다.
+  # 판정(F 줄)은 aa_flag가 처리한다. 판정에 쓰는 앞선 줄(isCheckReady false)은 이미 남긴 줄이어도 시각만 기억한다.
+  #   unkpre: 신호(sys.kp.aa_ap)가 켜진 시각(on)보다 먼저 온 "AP 모드 모름"
+  #   sppfail: isCheckReady ret = false 뒤 30초 안의 onSppConnect() ret = false(헤드유닛 쪽 SPP 거절)
+  #   giveup: PhoneProjection 연결 시간 초과 tryCount 2 이상(재시도 포기) / cpwait: 카플레이가 연결되어 AA 갈래로 안 감
+  #   ok: 폰 Wi-Fi 접속 성공·TCP 연결 / clr: AP 켜짐 true·Wi-Fi 연결 준비 0 / iap <몇 초 전>: 아이폰 iAP2 연결 / iapd: 끊김
+  # 1.7.2(M-8 대신 진단): GPM이 보낸 "준비(1)"가 PP에 닿는지 본다(drafts/stock-re/bt-aa-autoconnect.md 1-4).
+  #   GPM 준비 N 보냄·PP 준비 N 받음·PP 서비스 시작·GPM SPP 상태 N. 값은 줄 끝의 숫자만 남긴다(이름·주소는 꺼내지 않는다).
+  #   "준비 1 보냄"이 "서비스 시작"보다 먼저이고 "준비 1 받음"이 없으면 그 가설이 맞다. 판정(F 줄)은 만들지 않는다(기록만).
+  _ns=$(date '+%H %M %S' | $BB awk '{ print $1 * 3600 + $2 * 60 + $3 }')
+  logcat -d -v time 2>/dev/null | $BB grep -E ' [VDIWEF]/(AAProjection|PhoneProjection|HMG-API) *\(' \
+    | $BB grep -E 'START_SPP_CONNECT_FOR_CONNECTIVITY|Sent WifiVersionRequest|wirelessSupported = |getWiFiApMode|isWifiApEnable = |Sent start request|MSG_WIFI_TRANSPORT_INIT retu|ACTION_WIRELESS_SPP_CONNECT_TIMEOUT|==> rfcommDisconnect|Already AA|isCheckReady ret = false|onSppConnect.. ret = false|connectivityConnectionTimeout|isConnectivityActivated return true|Connection status STATUS_|WifiTransport : .*onConnected|retry Wireless connection|canStartConnection = false|getWirelessConnection = false|bridge: iAP2 (dis)?connected comp=[14]|send requestWLDeviceReadyStatusUpdate|requestWLDeviceReadyStatusUpdate \[|PP Service is Running|onBTCMSppStatusChanged' \
+    | $BB awk -v last="$_last" -v max="$AAEV_MAX" -v on="$AA_ON_TM" -v now="${_ns:-0}" '
     # 찾는 글이 없으면 빈 값(줄 앞의 시각을 값으로 잘라 오지 않게, 리뷰 M2)
     function after(s,   i) { i = index($0, s); if (i == 0) return ""; return substr($0, i + length(s)) }
     # 값은 영문·숫자만, 8자까지(다른 글자는 지움: 이름 등이 섞여 나오지 않게)
     function word(s) { sub("^ +", "", s); sub("[ ,\t].*", "", s); gsub("[^0-9A-Za-z]", "", s); return substr(s, 1, 8) }
-    { tm = $1 " " $2; if (last != "" && tm <= last) next
-      e = ""
+    # logcat 시각("MM-DD HH:MM:SS.mmm")의 하루 안 초
+    function sod(t) { return substr(t, 7, 2) * 3600 + substr(t, 10, 2) * 60 + substr(t, 13) }
+    # 상태 숫자만: 칸 전체가 숫자("1")나 괄호 친 숫자("(1)")일 때만 그 숫자(3자까지), 아니면 "?"(이름 조각이 섞여 나오지 않게)
+    function num(s) { if (s !~ /^[(]?[0-9]+[)]?$/) return "?"; gsub("[^0-9]", "", s); return substr(s, 1, 3) }
+    { tm = $1 " " $2; nw = (last == "" || tm > last)
+      if (index($0, "isCheckReady ret = false") > 0) ck = sod(tm)
+      if (!nw) next
+      e = ""; f = ""; p = "안드로이드 오토: "
       if (index($0, "START_SPP_CONNECT_FOR_CONNECTIVITY") > 0) e = "블루투스로 연결 시작(SPP)"
       else if (index($0, "Sent WifiVersionRequest") > 0) e = "폰에 Wi-Fi 버전 요청"
       else if (index($0, "wirelessSupported = ") > 0) e = "폰 무선 지원 " word(after("wirelessSupported = "))
-      else if (index($0, "return APMode.UNKNOWN") > 0) e = "AP 모드 모름(AP 꺼짐으로 봄)"
+      else if (index($0, "return APMode.UNKNOWN") > 0) { e = "AP 모드 모름(AP 꺼짐으로 봄)"; if (on != "" && tm < on) { e = e ", 신호보다 먼저"; f = "unkpre" } }
       else if (index($0, "getWiFiApMode wifiMode = ") > 0) e = "AP 모드 " word(after("wifiMode = "))
-      else if (index($0, "isWifiApEnable = ") > 0) { e = "AP 켜짐 " word(after("isWifiApEnable = ")); m = word(after("mode = ")); if (m != "") e = e " 모드 " m }
+      else if (index($0, "isWifiApEnable = ") > 0) { v = word(after("isWifiApEnable = ")); e = "AP 켜짐 " v; m = word(after("mode = ")); if (m != "") e = e " 모드 " m; if (v == "true") f = "clr" }
       else if (index($0, "Sent start request") > 0) e = "폰에 Wi-Fi 연결 요청"
-      else if (index($0, "MSG_WIFI_TRANSPORT_INIT retu") > 0) e = "Wi-Fi 연결 준비 결과 " word(after("retu = "))
+      else if (index($0, "MSG_WIFI_TRANSPORT_INIT retu") > 0) { v = word(after("retu = ")); e = "Wi-Fi 연결 준비 결과 " v; if (v == "0") f = "clr" }
       else if (index($0, "ACTION_WIRELESS_SPP_CONNECT_TIMEOUT") > 0) e = "SPP 연결 시간 초과"
       else if (index($0, "==> rfcommDisconnect") > 0) e = "블루투스 RFCOMM 끊김"
       else if (index($0, "Already AA") > 0) e = "이미 다른 AA 시도 중(유선 USB 등)"
-      if (e != "" && n < max + 0) { print "E 안드로이드 오토: " e " (" $2 ")"; n++ }
+      else if (index($0, "isCheckReady ret = false") > 0) e = "폰 프로젝션 준비 확인 false"
+      else if (index($0, "ret = false") > 0 && index($0, "onSppConnect") > 0) {
+        e = "헤드유닛 쪽 블루투스(SPP) 다시 연결 거절"; d = sod(tm) - ck; if (ck != "" && d >= 0 && d <= 30) f = "sppfail" }
+      else if (index($0, "connectivityConnectionTimeout") > 0) { v = word(after("tryCount[")); e = "폰 프로젝션 연결 시간 초과(시도 " v ")"; if (v + 0 >= 2) f = "giveup" }
+      else if (index($0, "isConnectivityActivated return true") > 0) { e = "카플레이 연결 중이라 건너뜀"; f = "cpwait" }
+      else if (index($0, "Connection status STATUS_") > 0) { v = word(after("STATUS_")); e = "폰 Wi-Fi 접속 " v; if (v == "SUCCESS") f = "ok" }
+      else if (index($0, "WifiTransport") > 0 && index($0, "onConnected") > 0) { e = "TCP 연결됨"; f = "ok" }
+      else if (index($0, "retry Wireless connection") > 0) e = "Wi-Fi 세션 오류로 한 번 다시 시도"
+      else if (index($0, "canStartConnection = false") > 0) e = "연결 시작 막힘(canStartConnection false)"
+      else if (index($0, "getWirelessConnection = false") > 0) e = "AA 무선 설정 꺼짐(getWirelessConnection false)"
+      else if (index($0, "iAP2 connected comp=4") > 0) { p = "카플레이: "; e = "아이폰 블루투스 연결(iAP2)"; a = now - int(sod(tm)); if (a < 0) a += 86400; f = "iap " a }
+      else if (index($0, "iAP2 disconnected comp=4") > 0) { p = "카플레이: "; e = "아이폰 블루투스 iAP2 끊김"; f = "iapd" }
+      else if (index($0, "iAP2 connected comp=1") > 0) { p = "카플레이: "; e = "아이폰 USB(유선) iAP2 연결"; f = "usbon" }
+      else if (index($0, "iAP2 disconnected comp=1") > 0) { p = "카플레이: "; e = "아이폰 USB(유선) iAP2 끊김"; f = "usboff" }
+      # 진단 4줄(M-8 대신). 숫자는 늘 줄의 마지막 칸이다: "…:  [Ready] 1"(펌웨어에 따라 [ ] 안이 폰 이름), "…[이름], Ready (1)",
+      # "…device: 이름 status: 2"
+      else if (index($0, "send requestWLDeviceReadyStatusUpdate") > 0) e = "AA 앱(GPM)이 폰 프로젝션에 준비 " num($NF) " 보냄"
+      else if (index($0, "requestWLDeviceReadyStatusUpdate [") > 0 && index($0, "Ready (") > 0) e = "폰 프로젝션이 준비 " num($NF) " 받음"
+      else if (index($0, "PP Service is Running") > 0) e = "폰 프로젝션 서비스 시작(AA 앱이 확인)"
+      else if (index($0, "onBTCMSppStatusChanged") > 0) { v = "?"; if ($(NF - 1) == "status:") v = num($NF); e = "AA 앱(GPM)이 블루투스 SPP 상태 " v " 받음" }
+      if (e != "" && n < max + 0) { print "E " p e " (" $2 ")"; n++ }
+      if (f != "") print "F " f
       if (mx == "" || tm > mx) mx = tm }
     END { if (mx != "") print "T " mx }' > $W/aaev 2>/dev/null
   [ -f $W/aaev ] || return 0
   while IFS= read -r _l; do
     case "$_l" in
       "E "*) log "${_l#E }" ;;
+      "F "*) aa_flag ${_l#F } ;;
       "T "*) echo "$_bid ${_l#T }" > $AAT ;;
     esac
   done < $W/aaev
@@ -689,13 +1011,52 @@ stop_all() {
   return 0
 }
 
-# log.pid의 프로세스가 우리 로그 파이프(마지막 단계 uniq)일 때만 죽인다 (/data/local/tmp는 재부팅 뒤에도
-# 남아 예전 pid가 다른 프로세스를 가리킬 수 있다). 마지막 단계가 죽으면 앞의 grep과 logcat은 SIGPIPE로 끝난다.
+# log.pid의 프로세스가 우리 로그 파이프의 마지막 단계일 때만 죽인다. 마지막 단계가 죽으면 앞의 awk·grep·logcat은 SIGPIPE로 끝난다.
+# log.pid에는 logstart의 $!가 들어간다: 뒤에서 돌린 파이프라인의 $!는 마지막 명령($_u: "$BB uniq -c -f 2" 또는 "$BB grep .")의 pid다.
+# 1.7.2(P-16): 예전에는 /proc/<pid>/cmdline을 grep으로 봤는데, cmdline은 인자를 NUL로 나누고 busybox 1.8.1 grep은 첫 NUL에서
+# 줄을 끊는다. 첫 인자가 "/system/bin/busybox"라 logcat|grep|uniq에 맞지 않아 로거를 멈추지 못했다(FINDINGS 2748행).
+# 이제는 NUL이 없는 /proc/<pid>/stat의 이름 칸(busybox 애플릿이면 "(busybox)", toolbox면 "(grep)" 등)을 보고, pid와 함께
+# 적어 둔 부팅 id가 이번 부팅과 같을 때만 죽인다(/data/local/tmp는 재부팅 뒤에도 남아 예전 pid가 다른 프로세스를 가리킬 수 있다).
+# 부팅 id가 없는 예전 형식(1.7.1까지)은 죽이지 않는다(예전과 같은 결과).
 killlog() {
-  _p=$(cat $W/log.pid 2>/dev/null)
-  [ -n "$_p" ] && $BB grep -q -E 'logcat|grep|uniq' /proc/$_p/cmdline 2>/dev/null && kill $_p 2>/dev/null
+  _p=; _pb=
+  [ -f $W/log.pid ] && read _p _pb < $W/log.pid
+  case "$_p" in ''|*[!0-9]*) _p= ;; esac
+  if [ -n "$_p" ] && [ -n "$_pb" ] && [ "$_pb" = "$(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" ] && [ -r $PROC/$_p/stat ]; then
+    read _k1 _k2 _kr < $PROC/$_p/stat
+    case "$_k2" in "(busybox)"|"(uniq)"|"(grep)") kill $_p 2>/dev/null ;; esac
+  fi
   rm -f $W/log.pid
 }
+# --- 1.7.2(P-15): ap.log 크기 제한 ---
+# ap.log는 NEMESIS svcmgr가 이 스크립트의 출력을 받아 쓰는 파일이다(/data/nemesis/logs/<id>/<name>.log, 재부팅해도 남음).
+# 크기 제한이 없어 aa_events·wifi_events 줄이 계속 쌓였다. APMAX(512KB)를 넘으면 ap.log.1로 복사하고 ap.log를 비운다(최대 2개).
+# 비워도 이어서 쓰려면 출력이 덧붙이기(O_APPEND)로 열려 있어야 한다. 그래서 시작할 때 표준출력이 정말 ap.log 파일이면 그 파일을
+# 덧붙이기로 다시 연다(aplog_open). 표준출력이 파일이 아니면(파이프 등) 밀지 않는다(APROT=0, 예전과 같음).
+APLOG=${APLOG:-/data/nemesis/logs/korea.projection/ap.log}
+APMAX=${APMAX:-524288}
+APROT=0
+# fd $1이 가리키는 경로(/proc/<pid>/fd). readlink가 없으면 ls -l의 마지막 칸
+fd_target() {
+  $BB readlink $PROC/$$/fd/$1 2>/dev/null || ls -l $PROC/$$/fd/$1 2>/dev/null | $BB awk '{ print $NF }'
+}
+aplog_open() {
+  [ "$(fd_target 1)" = "$APLOG" ] || return 0
+  if [ "$(fd_target 2)" = "$APLOG" ]; then exec >> "$APLOG" 2>&1; else exec >> "$APLOG"; fi
+  APROT=1
+}
+aplog_rotate() {
+  [ "$APROT" = 1 ] || return 0
+  _asz=$( { $BB wc -c < $APLOG; } 2>/dev/null); _asz=$(echo $_asz)
+  case "$_asz" in ''|*[!0-9]*) return 0 ;; esac
+  [ $_asz -lt $APMAX ] && return 0
+  # 복사가 실패해도(공간 부족 등) 비운다: 그러지 않으면 ap.log가 끝없이 커진다
+  $BB cp -f $APLOG $APLOG.1 2>/dev/null || $BB rm -f $APLOG.1
+  : > $APLOG
+  log "ap.log가 ${APMAX}바이트를 넘어 앞부분을 ap.log.1로 옮김"
+}
+# P-17: 이번 부팅 첫 시작 줄(리포트 "연결 기록" 칸은 이 줄 뒤만 보인다). 바꾸면 status.sh도 같이 바뀐다(같은 변수).
+SVC_MARK="서비스 시작: 이번 부팅 처음"
 
 # $W/debug가 있을 때만: 카플레이 관련 logcat을 $W/cp.log에 남긴다(폰 이름이 들어가므로 기본은 꺼짐).
 # 이 헤드유닛의 logcat은 -f와 함께 태그 필터를 무시하므로 grep으로 거른다.
@@ -875,12 +1236,14 @@ logstart() {
   # 1.7.0: 폰 이름·MAC·IP·VIN·전화번호를 가린다(KPMASK). 가리기 awk가 이 busybox에서 안 되면 디버그 로그를 남기지 않는다.
   echo "x" | $BB awk "$KPMASK" >/dev/null 2>&1 || { log "디버그 로그 안 남김: 가리기(awk)가 이 busybox에서 안 됨"; return 0; }
   logcat -v time 2>/dev/null | $BB grep -E "$TAGS" | $BB grep -v -E "$_d" | $BB grep -v -i -E 'ssid|psk *[=:]|passphrase|password|bssid|key=' | $BB awk "$KPMASK" | $_u >> $W/cp.log &
-  echo $! > $W/log.pid
+  # 1.7.2(P-16): pid와 부팅 id를 함께(killlog가 이번 부팅의 것인지 본다)
+  echo "$! $(cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} 2>/dev/null)" > $W/log.pid
 }
 # 파이프를 다시 시작하지 않고 파일만 밀어낸다: 다시 시작하면 logcat이 버퍼 전체를 다시 써서
 # 몇 분 치가 겹쳐 쌓였다(run3). uniq는 >>(O_APPEND)로 열었으므로 cp.log를 비우면 처음부터 다시 쓴다.
 # 복사와 비우기 사이에 들어온 몇 줄은 잃을 수 있다(디버그용이라 감수).
 logrotate() {
+  aplog_rotate
   [ -f $W/log.pid ] || return 0
   _sz=$( { $BB wc -c < $W/cp.log; } 2>/dev/null)
   [ ${_sz:-0} -lt $LOGMAX ] && return 0
@@ -896,7 +1259,7 @@ logrotate() {
 # "changed outside HMG-API"로 멈추며 --force로도 다시 쓰지 않는다).
 # `hmgapid engine status`에서 "CHANGED <권한 파일> … expected <md5>, found absent" 줄만 골라,
 # HMG-API(Engine.features)가 쓰는 것과 같은 텍스트의 md5가 기록과 같을 때만 쓴다. 그 뒤 일반 apply.
-# 되돌린 파일은 HMG-API 것이므로 이 패키지를 지워도 남겨 둔다.
+# 되돌린 파일 이름은 $PERMS_OURS에 남기고, 패키지를 지울 때 HMG-API가 더 관리하지 않는 것만 perms_revert가 지운다(1.7.2 P-14).
 PERMS=${PERMS:-/system/etc/permissions}
 perm_text() { $BB printf '<permissions>\n    <feature name="%s" />\n</permissions>\n' "$1"; }
 # HMG-API에 남아 있는 다른 변경(앱에서 바꾸고 아직 적용 안 한 모드 등)까지 몰래 적용하지 않도록,
@@ -966,11 +1329,13 @@ HMGDATA=${HMGDATA:-/data/hmgapi}
 SDIO=${SDIO:-/sys/bus/sdio/devices}
 WIFI_SEEN=${WIFI_SEEN:-$HMGDATA/public/wifi-chip}
 BK=${BK:-/data/nemesis/backup/korea.projection}
+# 1.7.2(P-14): fix_perms가 새로 쓴 권한 파일 이름(한 줄에 하나). 패키지를 지울 때 perms_revert가 읽는다.
+PERMS_OURS=${PERMS_OURS:-$BK/perms.ours}
 MOD_ID=wireless-carplay-aa
 # 패키지에 든 모드 zip의 md5 (busybox 1.8.1에 sha256sum이 없다). zip을 바꾸면 함께 바꾼다.
-MOD_MD5=57305323c4aceffe2da85a5af8f9348a
+MOD_MD5=82b013c6b547dce0e958109b0d2eea98
 # 패키지에 든 모드의 버전(mod.json "version"). 1.5.7부터 차에 있는 우리 모드가 이것과 다르면 바꾼다(mod_update).
-MOD_VER=2.3.0
+MOD_VER=2.4.0
 # 1.7.1: 토스트는 쓰지 않는다(CLAUDE.md 1장, 소유자 결정 2026-11-08: 너무 빨리 사라져 차에서 읽을 수 없다).
 # 안내는 ap.log("안내: …")와 상태 화면 앱이 읽는 알림 기록 $NOTICE(644, 비밀값 없음)에 남긴다.
 # 알림 기록은 한 줄에 "<시각(초)> <부팅 id> <문구>", 최근 NOTICE_KEEP줄만. 앱은 이번 부팅의 줄만 보인다.
@@ -1048,7 +1413,16 @@ svc_done() {
 }
 wake_wifi() {
   wifi_chip_seen && return 0
-  [ -f $BK/wifi.nochip ] || [ -f $BK/wifi.woke ] && return 2
+  # 1.7.2(P-12): 칩 없음(wifi.nochip)으로 멈췄는데 그 근거 기록(nochip-wifi.txt, 1.7.1부터)이 없는 차(#58 셀토스 1.7.0)는
+  # 한 번만 다시 깨워 근거를 남긴다($BK/nochip.rechk, 패키지를 지우면 같이 지워짐). 칩이 나타나면 기록을 지우고 설치를 이어 간다.
+  # 근거 사본은 $BK/nochip-wifi.txt에도 둔다(업데이트로 $W가 지워져도 근거가 있던 차는 다시 깨우지 않음, 리뷰 M-1).
+  _rechk=0
+  if [ -f $BK/wifi.nochip ] && [ ! -f $BK/nochip.rechk ] && [ ! -s $NOCHIP_LOG ] && [ ! -s $BK/nochip-wifi.txt ]; then
+    : > $BK/nochip.rechk; _rechk=1
+    log "Wi-Fi 칩 없음 기록이 있지만 근거 기록(nochip-wifi.txt)이 없음: 한 번만 다시 확인"
+  elif [ -f $BK/wifi.nochip ] || [ -f $BK/wifi.woke ]; then
+    return 2
+  fi
   log "Wi-Fi 칩이 아직 안 보임: Wi-Fi를 한 번 켜서 칩을 깨움"
   ptrack 62 run "Wi-Fi 칩을 깨우는 중입니다"
   notice "Korea Projection: 무선 카플레이 준비로 Wi-Fi를 한 번 켭니다. 카플레이·블루투스가 잠시 끊길 수 있습니다."
@@ -1059,13 +1433,15 @@ wake_wifi() {
   _i=0
   while [ $_i -lt ${WAKE_MAX:-30} ]; do
     sleep 2
-    wifi_chip_seen && { svc_done $_sp; log "Wi-Fi 칩이 나타남"; return 0; }
+    wifi_chip_seen && { svc_done $_sp; log "Wi-Fi 칩이 나타남"; [ $_rechk = 1 ] && rm -f $BK/wifi.nochip; return 0; }
     _i=$((_i+1))
   done
   svc_done $_sp
   log "Wi-Fi를 켜도 칩이 나타나지 않음 (다음 부팅부터 다시 하지 않음, 순정 Wi-Fi 기록은 nochip-wifi.txt)"
   : > $BK/wifi.nochip
   wifi_record "칩 깨우기 실패" $NOCHIP_LOG
+  # 1.7.2 리뷰 M-1: $W는 업데이트 때 지워지므로 근거 사본을 $BK에도 둔다(업데이트 뒤 칩 없는 차가 Wi-Fi를 다시 켜지 않게)
+  [ -s $NOCHIP_LOG ] && cat $NOCHIP_LOG > $BK/nochip-wifi.txt 2>/dev/null
   wifi_was_off && svc wifi disable
   return 1
 }
@@ -1382,6 +1758,12 @@ setup_hmgapi() {
     ptrack 100 done "무선 카플레이 설정이 끝나 있습니다."
   elif [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && [ -z "$LAST_TOAST" ]; then
     ptrack 100 fail "HMG-API 무선 모드가 있지만 꺼져 있거나 적용되지 않았습니다. HMG-API 앱에서 켜고 변경 사항을 적용한 뒤 내비를 재부팅해 주세요."
+  elif [ -z "$LAST_TOAST" ] && [ -f $BK/mod.tried ] && [ ! -f $HMGDATA/mods/$MOD_ID/mod.json ] \
+      && [ "$(set -- $($BB md5sum < $KP_HMG/$MOD_ID.zip 2>/dev/null); echo "$1")" = $MOD_MD5 ]; then
+    # 1.7.2(P-13, 이슈 #27 약속): 우리가 넣은 모드를 차주가 HMG-API 앱에서 지운 차. mod.tried가 남아 다시 넣지 않는다(차주 선택 존중).
+    # "넣지 못했습니다"로 보이면 실패로 오해하므로 지운 기록과 다시 쓰는 방법을 알린다. (zip md5가 다른 경우는 아래 보통 문구)
+    log "무선 모드 안 넣음: 차주가 HMG-API 앱에서 지운 기록(mod.tried)이 있음"
+    ptrack 100 fail "무선 모드가 지워진 기록이 있어 다시 넣지 않습니다(HMG-API 앱에서 지웠거나 HMG-API를 다시 설치한 경우). 다시 쓰려면 NEMESIS에서 Korea Projection을 삭제하고 다시 설치한 뒤 내비를 재부팅해 주세요."
   else
     ptrack 100 fail "${LAST_TOAST:-무선 모드를 넣지 못했습니다. USB를 꽂고 Launch로 제보 파일을 만들어 보내 주세요.}"
   fi
@@ -1402,6 +1784,8 @@ ptrack() { [ "$P_ON" = 1 ] && prog "$@"; return 0; }
 fix_perms() {
   # 지원하지 않는 차는 진행 기록을 쓰지 않는다(main이 "지원하지 않는 차"를 쓴다). 권한 파일 확인은 그대로 한다.
   P_ON=0; setup_done || P_ON=1
+  # 1.7.2(P-18): 우리 모드를 새 판으로 바꿀 차도 진행 기록을 남긴다(상태 화면에 "기다림 → 재부팅" 할 일을 보이게)
+  MOD_WAIT=0; mod_pending && { P_ON=1; MOD_WAIT=1; }
   car_in "$(getprop ro.build.product 2>/dev/null)" "$CARS" || P_ON=0
   if ! command -v hmgapid >/dev/null 2>&1; then
     ptrack 100 fail "HMG-API가 없습니다. HMG-API 1.0.2 이상을 먼저 설치해 주세요."
@@ -1411,11 +1795,30 @@ fix_perms() {
   rm -f $W/fix.pid
 }
 _fix_perms() {
+  # 1.7.2(P-14, 리뷰 L5): 1.7.1까지 쓴 권한 파일 이름을 ap.log에서 찾아 기록으로 옮겨 둔다(ap.log가 회전돼 사라지기 전에)
+  [ -d $BK ] && [ ! -f $PERMS_OURS ] && { perms_seed; [ -f $PERMS_OURS ] || : > $PERMS_OURS; }
   # 부팅 직후 HMG-API의 부팅 단계(hook-check: remount rw → 쓰기 → ro)와 겹치지 않게 잠시 기다린다.
   # 10초씩 나눠 기다리며 진행 기록을 5→25%로 올린다(사용자가 멈춘 줄 알고 삭제하지 않게)
+  # 1.7.2(P-18): FIX_DELAY는 이번 부팅에서 서비스가 처음 시작한 때($W/svc.start "<부팅 id> <부팅 뒤 초>", main이 씀)부터
+  # 센다(리뷰 M1: 커널 부팅부터 세면 보통 부팅에서도 HMG-API 부팅 단계와의 간격이 줄어든다). 같은 부팅에 서비스가 다시
+  # 시작돼도(#60 K3 15:56) 처음부터 다시 기다리지 않고, 이미 지났으면 바로 한다. uptime이나 기록을 못 읽으면 예전처럼
+  # 지금부터 FIX_DELAY를 다 기다린다.
   _wt=0; _fd=${FIX_DELAY:-120}
+  _up=$($BB awk '{ print int($1) }' $UPTIME 2>/dev/null)
+  case "$_up" in ''|*[!0-9]*) _up= ;; esac
+  _sb0=; _su0=
+  [ -f $W/svc.start ] && read _sb0 _su0 < $W/svc.start
+  case "$_su0" in ''|*[!0-9]*) _su0= ;; esac
+  if [ -n "$_up" ] && [ -n "$_su0" ] && [ -n "$_sb0" ] && [ "$_sb0" = "$(cat $BOOT_ID 2>/dev/null)" ] && [ $_up -ge $_su0 ]; then
+    _wt=$((_up - _su0)); [ $_wt -gt $_fd ] && _wt=$_fd
+    [ $_wt -gt 0 ] && log "권한 파일 확인 대기: 첫 시작 뒤 $((_up - _su0))초 지남, 남은 대기 $((_fd - _wt))초"
+  fi
   while [ $_wt -lt $_fd ]; do
-    ptrack $((5 + 20 * _wt / (_fd > 0 ? _fd : 1))) run "HMG-API가 준비되기를 기다리는 중입니다(약 2분)"
+    if [ "$MOD_WAIT" = 1 ]; then
+      ptrack $((5 + 20 * _wt / (_fd > 0 ? _fd : 1))) run "무선 모드를 새 판으로 바꾸기 전에 기다리는 중입니다(약 $((_fd - _wt))초). 재부팅 안내가 나오면 내비를 재부팅해 주세요."
+    else
+      ptrack $((5 + 20 * _wt / (_fd > 0 ? _fd : 1))) run "HMG-API가 준비되기를 기다리는 중입니다(약 $((_fd - _wt))초)"
+    fi
     _s=$((_fd - _wt)); [ $_s -gt 10 ] && _s=10
     sleep $_s; _wt=$((_wt + _s))
   done
@@ -1456,6 +1859,8 @@ _fix_perms() {
     [ -f $PERMS/$_n.xml ] && continue
     if perm_text "$_n" > $PERMS/$_n.xml && $BB chmod 644 $PERMS/$_n.xml; then
       echo "$_n.xml" >> $W/perms.done; log "권한 파일 되돌림: $_n"
+      # 1.7.2(P-14): 우리가 쓴 파일 이름을 남긴다(삭제할 때 perms_revert가 이것만 되돌린다). 업데이트해도 $BK는 남는다.
+      [ -d $BK ] && { has_line "$_n" $PERMS_OURS || echo "$_n" >> $PERMS_OURS; }
     else
       rm -f $PERMS/$_n.xml; log "권한 파일 쓰기 실패: $_n"
     fi
@@ -1476,6 +1881,193 @@ _fix_perms() {
   set +f
   rm -f $W/perms.done
   notice "$_m"
+}
+
+# --- 1.7.2(P-14): 패키지를 지울 때 우리가 쓴 무선 권한 파일 되돌리기 (소유자 결정 2026-11-08) ---
+# 문제: fix_perms가 쓴 권한 파일이 삭제 뒤에도 남아, HMG-API까지 지우면 유선 카플레이도 안 될 수 있다
+# (니로 2026-11-07, FINDINGS "시스템 파일 순정 되돌리기 실행"). 순정은 권한 파일 2개가 없고, featurexml.cfg의
+# 해당 줄(니로 17·18번째)이 "-…xml"이다(부팅 때 그 파일을 지움). drafts/stock-re/decision-stock-check.md 4절.
+# fix_perms는 파일이 없을 때만 쓰므로 우리가 바꾸기 전 상태는 "파일 없음"이다. 그래서 권한 파일 되돌리기는 지우기다.
+# 대상: $PERMS_OURS에 적힌 이름. 1.7.1까지는 이 기록이 없어 ap.log(·ap.log.1)의 "권한 파일 되돌림: <이름>" 줄
+# (fix_perms만 쓰는 줄)로도 찾는다. 이름은 com.hkmc.*·android.hardware.*·android.software.* 꼴만 받는다.
+# 다음을 모두 만족하는 파일만 지운다(아니면 그대로 두고 기록만):
+#  - 파일 내용이 지금도 우리가 쓴 것과 같다(md5). 다르면 다른 쪽이 바꾼 것이다.
+#  - wireless.projection이 설치돼 있지 않다(그 패키지도 무선 권한 파일과 featurexml을 바꾼다).
+#  - HMG-API가 그 파일을 관리하지 않는다(engine status에 그 경로가 없음). 관리 중이면 HMG-API 모드 것이므로
+#    HMG-API의 모드 삭제·되돌리기에 맡긴다. hmgapid가 있는데 응답이 없거나 상태를 못 읽으면 판단할 수 없어 둔다.
+# featurexml.cfg: 권한 파일을 지웠거나 이미 없는 이름 가운데 무선 카플레이·AA 2개(com.hkmc.software.connectivity.
+# *_wireless)만, 그 줄이 정확히 "#-<권한 폴더>/<이름>.xml"이면 앞의 "#"만 뗀다. 다른 줄(12번째 wifihotspot은
+# HMG-API 몫)은 건드리지 않는다. 경로는 HMG-API와 같은 곳(ro.mobis.targetdir)에서 얻는다. HMG-API가 이 파일을
+# 관리 중이면 두고, 줄바꿈(CRLF)을 그대로 지키고, 바뀐 줄이 그 줄뿐이고 크기가 정확히 그만큼 줄었는지
+# 미리 확인한다. 예상과 다르면 featurexml은 두고 기록만 한다(권한 파일 되돌리기는 그대로 한다).
+# /system은 nemesis remount(안 되면 hmgapid remount)로 열고, 실제로 rw가 됐을 때만 바꾼다. 하나라도 실패하면
+# 지운 권한 파일은 같은 내용(644)으로 다시 쓰고 featurexml은 원본으로 되돌려 처음 상태로 둔다. 원래 ro였으면 ro로.
+# 알려진 한계: HMG-API의 "순정 백업"이 이미 바뀐 판이면(니로 c3fa…) 나중에 HMG-API를 지울 때 "#"이 다시 생길 수 있다.
+# 기록: 출력(NEMESIS 삭제 출력)과 ap.log. 파일 이름만 적는다(비밀값 없음).
+# 돌려주는 값: 0 할 일 없음·되돌림·남겨야 해서 둠, 1 되돌려야 하는데 못 함(그대로 둠)
+FX_PERMS=${FX_PERMS:-/system/etc/permissions}
+pr_log() { log "$*"; [ -d "${APLOG%/*}" ] && log "$*" >> $APLOG 2>/dev/null; return 0; }
+pr_add() {
+  case "$1" in com.hkmc.*|android.hardware.*|android.software.*) ;; *) return 0 ;; esac
+  case "$1" in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  case " $_prn " in *" $1 "*) ;; *) _prn="$_prn $1" ;; esac
+  return 0
+}
+# remount: nemesis로 하고, 종료 코드와 상관없이 실제 상태를 본 뒤 아니면 hmgapid로 한 번 더(리뷰 M4). 0: 원하는 상태가 됨
+sys_remount() {
+  nemesis remount $1 >/dev/null 2>&1
+  if [ "$1" = rw ]; then system_ro || return 0; else system_ro && return 0; fi
+  hmgapid remount $1 >/dev/null 2>&1
+  if [ "$1" = rw ]; then ! system_ro; else system_ro; fi
+}
+# 1.7.1까지는 기록이 없어 ap.log(·ap.log.1)의 "권한 파일 되돌림: <이름>" 줄(fix_perms만 씀)에서 이름을 찾아 기록에 더한다
+perms_seed() {
+  for _f in $APLOG.1 $APLOG; do
+    [ -f "$_f" ] || continue
+    for _n in $($BB awk '$3 == "권한" && $4 == "파일" && $5 == "되돌림:" && NF == 6 { print $6 }' "$_f" 2>/dev/null); do
+      _prn=; pr_add "$_n"
+      [ -n "$_prn" ] && { has_line "$_n" $PERMS_OURS || echo "$_n" >> $PERMS_OURS; }
+    done
+  done
+  return 0
+}
+# featurexml에서 "#" 뗄 줄을 만든다: $1 원본, $2 결과, $3 이름 목록. 0: 바꿀 줄이 있고 확인 통과, 1: 할 일 없음, 2: 예상과 다름
+fx_build() {
+  rm -f "$2" "$2.n"
+  $BB awk -v names="$3" -v pfx="$FX_PERMS" -v cnt="$2.n" '
+    BEGIN { k = split(names, a, " "); for (i = 1; i <= k; i++) want["#-" pfx "/" a[i] ".xml"] = 1; n = 0 }
+    { l = $0; if (substr(l, length(l), 1) == "\r") l = substr(l, 1, length(l) - 1)
+      if (l in want) { print substr($0, 2); n++ } else print $0 }
+    END { print n > cnt }' "$1" > "$2" 2>/dev/null || return 2
+  _fn=$(cat "$2.n" 2>/dev/null); rm -f "$2.n"
+  case "$_fn" in ''|*[!0-9]*) return 2 ;; 0) rm -f "$2"; return 1 ;; esac
+  # 확인 1: 크기가 바꾼 줄 수만큼만 줄었다(끝 줄바꿈이 없던 원본 등은 여기서 걸린다)
+  _fo=$($BB wc -c < "$1" 2>/dev/null); _fo=$(echo $_fo); _fw=$($BB wc -c < "$2" 2>/dev/null); _fw=$(echo $_fw)
+  case "$_fo$_fw" in ''|*[!0-9]*) return 2 ;; esac
+  [ $((_fo - _fn)) = "$_fw" ] || return 2
+  # 확인 2: 줄 수가 같고, 다른 줄은 모두 앞의 "#"만 빠진 것(CR 포함 나머지는 같음)
+  _fc=$($BB awk 'NR == FNR { a[FNR] = $0; m = FNR; next }
+    { if ($0 != a[FNR]) { if ("#" $0 != a[FNR]) bad = 1; d++ } c = FNR }
+    END { if (bad || c != m) print "bad"; else print d + 0 }' "$1" "$2" 2>/dev/null)
+  [ "$_fc" = "$_fn" ] || return 2
+  return 0
+}
+# featurexml.cfg 경로. 차의 ro.mobis.targetdir는 끝에 "/"가 없다(니로 "/system/onebin/depehev_kr", 2026-11-09 차 복사로 확인).
+# 끝 "/"가 있든 없든 한 번만 붙인다. 값이 없으면 빈 값을 돌려줘 아래 case에서 건너뛰게 한다.
+fx_path() {
+  _ftd=$(getprop ro.mobis.targetdir 2>/dev/null)
+  [ -n "$_ftd" ] || return 0
+  echo "${_ftd%/}/featurexml.cfg"
+}
+perms_revert() {
+  has_bb || return 0
+  _prn=
+  [ -d $BK ] && perms_seed
+  _prn=
+  if [ -f $PERMS_OURS ]; then
+    while IFS= read -r _n; do pr_add "$_n"; done < $PERMS_OURS
+  fi
+  [ -n "$_prn" ] || return 0
+  if [ -d $WPDIR ]; then
+    pr_log "무선 권한 파일 그대로 둠: wireless.projection이 설치돼 있음"
+    return 0
+  fi
+  _hs=
+  if command -v hmgapid >/dev/null 2>&1; then
+    # 데몬이 멈췄으면 status가 끝나지 않을 수 있어 ping을 먼저 본다(리뷰 M2)
+    hmgapid ping >/dev/null 2>&1 && _hs=$(hmgapid engine status 2>/dev/null)
+    if [ -z "$_hs" ]; then
+      pr_log "무선 권한 파일 되돌리기 못 함: HMG-API 응답 없음(관리 여부를 알 수 없어 그대로 둠)"
+      return 1
+    fi
+  fi
+  _del=; _fxn=
+  for _n in $_prn; do
+    _p=$PERMS/$_n.xml
+    if [ -f "$_p" ]; then
+      set -- $($BB md5sum < "$_p" 2>/dev/null); _have=$1
+      set -- $(perm_text "$_n" | $BB md5sum)
+      if [ -z "$_have" ] || [ "$_have" != "$1" ]; then
+        pr_log "무선 권한 파일 그대로 둠(내용이 바뀜): $_n"; continue
+      fi
+      case "$_hs" in
+        *" $_p "*) pr_log "무선 권한 파일 그대로 둠(HMG-API 모드가 관리 중): $_n"; continue ;;
+      esac
+      _del="$_del $_n"
+    elif [ -e "$_p" ]; then
+      continue
+    fi
+    case "$_n" in com.hkmc.software.connectivity.*_wireless) _fxn="$_fxn $_n" ;; esac
+  done
+  # featurexml.cfg 줄(권한 파일을 지우거나 이미 없는 무선 2개만)
+  _fx=${FXML:-$(fx_path)}
+  _fxdo=0
+  case "$_fx" in /system/onebin/*/featurexml.cfg|"$FXML") ;; *) _fxn= ;; esac
+  # 리뷰(1.7.2 재리뷰 M): featurexml 줄이 순정에서 "-…"라는 것은 니로(CARS_OK)에서만 확인했다. 다른 차는 줄을 그대로 둔다.
+  # 권한 파일은 지웠으므로 "#-" 줄이 남아도 부팅 뒤 그 파일은 없다(순정 "-"와 같은 결과).
+  if [ -n "$_fxn" ] && ! car_in "$(getprop ro.build.product 2>/dev/null)" "$CARS_OK"; then
+    pr_log "featurexml 그대로 둠(순정 줄을 확인한 차가 아님)"; _fxn=
+  fi
+  if [ -n "$_fxn" ] && [ -f "$_fx" ]; then
+    case "$_hs" in
+      *" $_fx "*) pr_log "featurexml 그대로 둠(HMG-API 모드가 관리 중)" ;;
+      *)
+        fx_build "$_fx" $BK/fx.new "$_fxn"; _fr=$?
+        if [ $_fr = 0 ]; then _fxdo=1
+        elif [ $_fr = 2 ]; then pr_log "featurexml 그대로 둠(예상과 다름: 무선 줄만 바꿀 수 없음)"; fi ;;
+    esac
+  fi
+  [ -n "$_del" ] || [ $_fxdo = 1 ] || return 0
+  _was_ro=0; system_ro && _was_ro=1
+  if [ $_was_ro = 1 ]; then
+    if ! sys_remount rw; then
+      rm -f $BK/fx.new
+      # 실제로는 열렸는데 확인만 못 했을 수도 있어 ro로 되돌리기를 한 번 부른다(리뷰 M4)
+      sys_remount ro
+      pr_log "무선 권한 파일 되돌리기 못 함: /system을 쓰기로 열지 못함(그대로 둠)"
+      return 1
+    fi
+  fi
+  _gone=; _bad=0; _why=
+  for _n in $_del; do
+    if rm -f $PERMS/$_n.xml 2>/dev/null && [ ! -e $PERMS/$_n.xml ]; then _gone="$_gone $_n"
+    else _bad=1; _why="권한 파일 지우기 실패"; break; fi
+  done
+  _fxok=0
+  if [ $_bad = 0 ] && [ $_fxdo = 1 ]; then
+    _fown=$(f_owner "$_fx"); _fprm=$(f_perm "$_fx")
+    set -- $($BB md5sum < $BK/fx.new 2>/dev/null); _fwant=$1
+    if $BB cp -f "$_fx" $BK/fx.orig && $BB cp -f $BK/fx.new "$_fx.kp-new" \
+        && $BB chown "$_fown" "$_fx.kp-new" && $BB chmod "$_fprm" "$_fx.kp-new" && $BB mv -f "$_fx.kp-new" "$_fx" \
+        && set -- $($BB md5sum < "$_fx" 2>/dev/null) && [ -n "$_fwant" ] && [ "$1" = "$_fwant" ]; then
+      _fxok=1
+    else
+      _bad=1; _why="featurexml 쓰기 실패"
+      rm -f "$_fx.kp-new"
+      # 원본으로(이미 바뀌었으면)
+      if [ -f $BK/fx.orig ] && [ "$(set -- $($BB md5sum < $BK/fx.orig 2>/dev/null); echo "$1")" != "$(set -- $($BB md5sum < "$_fx" 2>/dev/null); echo "$1")" ]; then
+        $BB cp -f $BK/fx.orig "$_fx.kp-new" && $BB chown "$_fown" "$_fx.kp-new" && $BB chmod "$_fprm" "$_fx.kp-new" \
+          && $BB mv -f "$_fx.kp-new" "$_fx"
+      fi
+    fi
+  fi
+  if [ $_bad = 1 ]; then
+    # 처음 상태로: 지운 권한 파일을 같은 내용으로 다시 쓴다
+    for _n in $_gone; do
+      if ! { perm_text "$_n" > $PERMS/$_n.xml && $BB chmod 644 $PERMS/$_n.xml; }; then
+        _why="$_why, 되돌리기도 실패: $_n"   # 리뷰 L2
+      fi
+    done
+  fi
+  rm -f $BK/fx.new $BK/fx.orig
+  if [ $_was_ro = 1 ] && ! sys_remount ro; then pr_log "/system을 ro로 되돌리지 못함(재부팅하면 ro)"; fi
+  if [ $_bad = 1 ]; then
+    pr_log "무선 권한 파일 되돌리기 못 함: $_why(그대로 둠)"
+    return 1
+  fi
+  for _n in $_gone; do pr_log "무선 권한 파일 원래대로(없음): $_n"; done
+  [ $_fxok = 1 ] && pr_log "featurexml 무선 줄 원래대로(-):$_fxn"
+  return 0
 }
 
 # 상태 화면 앱(korea.projection.app). NEMESIS의 kind=apk 설치를 쓰지 않는다: 2026-11-06 니로에서
@@ -1540,6 +2132,21 @@ main() {
     idle_forever
   fi
   $BB mkdir -p $W
+  # 1.7.2(P-15): ap.log를 덧붙이기로 다시 열어 둔다(크기 제한 aplog_rotate가 비워도 이어서 쓰게)
+  aplog_open
+  # 1.7.2(P-8·P-11·P-17): 이번 부팅의 첫 시작인가. $W/svc.start "<부팅 id> <부팅 뒤 초>"(첫 시작 때만 씀, 리포트가 읽음).
+  # 첫 시작이면 ap.log에 "서비스 시작: 이번 부팅 처음" 줄을 남긴다(리포트 "연결 기록" 칸은 이 줄 뒤만 보인다).
+  # 업데이트하면 $W가 지워지므로 업데이트 뒤 첫 시작도 "처음"이다.
+  _sb=$(cat $BOOT_ID 2>/dev/null); _su=$($BB awk '{ print int($1) }' $UPTIME 2>/dev/null); _so=
+  [ -f $W/svc.start ] && read _so _sx < $W/svc.start
+  if [ -n "$_sb" ] && [ "$_so" = "$_sb" ]; then
+    SVC_FIRST=0; log "서비스 다시 시작(같은 부팅, 부팅 뒤 ${_su:-?}초)"
+  else
+    SVC_FIRST=1; echo "${_sb:-none} ${_su:-0}" > $W/svc.start
+    log "$SVC_MARK(부팅 뒤 ${_su:-?}초)"
+  fi
+  # 상태 화면 안내 파일은 서비스만 쓴다: 지난 실행의 안내를 비운다
+  HINT_ON=1; HA_READY=; HA=; HA_T=; HI=; HI_T=; HC=; HC_T=; hint_write
   prod=$(getprop ro.build.product)
   # svc, pm, HMG-API는 Android가 다 켜진 뒤에 쓴다
   while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done
@@ -1586,6 +2193,8 @@ main() {
     idle_forever
   fi
   write_conf
+  # P-3: 지금 쓴 설정의 softap.conf 서명(30초 점검에서 비교)
+  CONF_SIG=$(conf_sig $SRC)
   # 확인된 차가 아니면 순정 핫스팟(다른 hostapd)이 도는 동안 시작하지 않는다(svc wifi enable이 순정 핫스팟을 끈다)
   # 1.6.2: 순정 hostapd가 카플레이 AP(softap.conf의 카플레이 SSID)면 "순정 AP로 준비됨"으로 가고 돌아오지 않는다.
   # 일반 핫스팟이거나 판단할 수 없으면 예전처럼 순정이 멈출 때까지 기다린다.
@@ -1633,11 +2242,14 @@ main() {
   aa_sig
   rm -f $CPN
   wifi_events; aa_events; cp_watch
+  hint_tick
   # 설정이 끝난 차(재부팅 뒤 등)는 핫스팟이 켜지면 "준비됨". 설정 중이면 진행 기록은 fix_perms가 맡는다.
   # 이번 부팅에 "재부팅 필요"·"실패"를 이미 썼으면 덮어쓰지 않는다(재부팅해야 훅이 켜진다)
   if setup_done && { [ ! -f $PROG ] || $BB grep -q '^state=done$' $PROG 2>/dev/null; }; then
     prog 100 done "무선 카플레이 준비됨. 아이폰을 연결해 보세요."
   fi
+  # 1.7.2(P-7): 우리 핫스팟을 켠 뒤에 순정 AP 저장값을 맞춘다(settings가 몇 초 걸려도 핫스팟은 이미 켜져 있음)
+  apon_off
   n=0
   while true; do
     sleep 30 &
@@ -1645,12 +2257,16 @@ main() {
     logrotate
     ap_yield && continue
     ap_tick
+    conf_tick
     up
     aa_sig
     wifi_events; aa_events; cp_watch
+    hint_tick
     n=$((n+1))
     # once an hour: one line with the CarPlay connections
     [ $((n % 120)) -eq 0 ] && log "동작 중: $(cp_count) 개 카플레이 연결"
+    # 1.7.2(P-7, 리뷰 M2): 10분마다 순정 AP 저장값을 다시 본다(0이면 settings get 한 번뿐, 로그 없음)
+    [ $((n % 20)) -eq 0 ] && apon_off
   done
 }
 
