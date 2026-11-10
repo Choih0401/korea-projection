@@ -8,6 +8,15 @@ BB=
 BK=/data/nemesis/backup/korea.projection
 umask 077
 mkdir -p $BK
+# Explicit install-time recovery controls. Reset is never consumed just by booting.
+if [ -f /storage/usb0/kp-ig-wifi-off ] || [ -f /storage/usb1/kp-ig-wifi-off ]; then
+  : > "$BK/ig-wifi-off"
+elif [ -f /storage/usb0/kp-ig-wifi-on ] || [ -f /storage/usb1/kp-ig-wifi-on ]; then
+  rm -f "$BK/ig-wifi-off"
+fi
+if [ -f /storage/usb0/kp-ig-wifi-reset ] || [ -f /storage/usb1/kp-ig-wifi-reset ]; then
+  rm -f "$BK/ig-wifi-recovery.state"
+fi
 [ -f $BK/wifi_on ] || settings get global wifi_on > $BK/wifi_on 2>/dev/null
 # opt-in CarPlay log (svc/hotspot.sh, off by default): a file korea-projection-debug on the stick
 W=/data/local/tmp/korea.projection

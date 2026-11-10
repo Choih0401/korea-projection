@@ -307,7 +307,7 @@ nowlan_now() { [ -s $NOWLAN ] && [ "$(cat $NOWLAN 2>/dev/null)" = "$(cat ${BOOT_
 wlan_fail() {
   nowlan_now && return 0
   cat ${BOOT_ID:-/proc/sys/kernel/random/boot_id} > $NOWLAN 2>/dev/null
-  log "Wi-Fi 장치(wlan0)가 없음: Wi-Fi 드라이버가 올라오지 않아 핫스팟을 켜지 못함(Wi-Fi 설정 $(settings get global wifi_on 2>/dev/null), 드라이버 상태 $(getprop wlan.driver.status 2>/dev/null)). 계속 다시 시도함"
+  log "Wi-Fi 장치(wlan0)가 없음: Wi-Fi 드라이버가 올라오지 않아 핫스팟을 켜지 못함(Wi-Fi 설정 $(settings get global wifi_on 2>/dev/null), 드라이버 상태 $(getprop wlan.driver.status 2>/dev/null)). 장치 상태를 확인하며 대기함"
   wifi_record "wlan0 없음" $NOWLAN_LOG
   return 0
 }
@@ -335,6 +335,12 @@ wifi_record() {
   return 0
 }
 up() {
+  # The recovery owns Wi-Fi until it releases the lock; do not race its HAL operations.
+  [ -d "${IGR_LOCK:-$W/ig-wifi-recovery.lock}" ] && return 0
+  if command -v ig_wifi_target >/dev/null 2>&1 && ig_wifi_target && [ ! -d "$WLAN" ]; then
+    wlan_fail
+    return 0
+  fi
   $BB ifconfig wlan0 $AP_IP netmask 255.255.255.0 up 2>/dev/null
   if ! running "hostapd $CONF"; then
     hostapd $CONF >/dev/null 2>&1 &
@@ -1003,6 +1009,7 @@ setup_done() {
 # 서비스가 끝날 때(TERM)와 패키지를 지울 때만: 핫스팟에 더해 뒤에서 도는 권한 파일 확인(fix_perms)도 멈춘다.
 # 시작할 때 부르는 stop_ap는 이것을 건드리지 않는다 (방금 띄운 확인 작업을 죽이지 않게)
 stop_all() {
+  command -v ig_wifi_cancel >/dev/null 2>&1 && ig_wifi_cancel
   stop_ap
   if fix_running; then set -- $(cat $W/fix.pid); kill $1 2>/dev/null; fi
   rm -f $W/fix.pid
@@ -1755,7 +1762,11 @@ setup_hmgapi() {
   elif [ $_fail = 1 ]; then
     ptrack 100 fail "${LAST_TOAST:-무선 카플레이 설정에 실패했습니다. USB를 꽂고 Launch로 제보 파일을 만들어 보내 주세요.}"
   elif setup_done; then
-    ptrack 100 done "무선 카플레이 설정이 끝나 있습니다."
+    if command -v ig_wifi_target >/dev/null 2>&1 && ig_wifi_target && [ ! -d "$WLAN" ]; then
+      ptrack 100 fail "Wi-Fi 초기화 실패: wlan0가 없어 핫스팟을 켜지 못했습니다. Launch로 복구 기록을 저장해 주세요."
+    else
+      ptrack 100 done "무선 카플레이 설정이 끝나 있습니다."
+    fi
   elif [ -f $HMGDATA/mods/$MOD_ID/mod.json ] && [ -z "$LAST_TOAST" ]; then
     ptrack 100 fail "HMG-API 무선 모드가 있지만 꺼져 있거나 적용되지 않았습니다. HMG-API 앱에서 켜고 변경 사항을 적용한 뒤 내비를 재부팅해 주세요."
   elif [ -z "$LAST_TOAST" ] && [ -f $BK/mod.tried ] && [ ! -f $HMGDATA/mods/$MOD_ID/mod.json ] \
@@ -1791,6 +1802,8 @@ fix_perms() {
     ptrack 100 fail "HMG-API가 없습니다. HMG-API 1.0.2 이상을 먼저 설치해 주세요."
     rm -f $W/fix.pid; return 0
   fi
+  # fix_perms is a background worker; cancel only commands it spawned if stopped.
+  command -v ig_wifi_cancel >/dev/null 2>&1 && trap 'ig_wifi_cancel; exit 0' TERM INT HUP
   _fix_perms
   rm -f $W/fix.pid
 }
@@ -1831,6 +1844,13 @@ _fix_perms() {
     _i=$((_i+1)); [ $_i -ge 30 ] && { log "권한 파일 확인 건너뜀: HMG-API 데몬 응답 없음"; ptrack 100 fail "HMG-API가 응답하지 않습니다. 내비를 재부팅한 뒤 다시 확인해 주세요."; return 0; }
     sleep 10
   done
+  if command -v ig_wifi_recover >/dev/null 2>&1; then
+    IGR_SETUP=1 ig_wifi_recover; _igrc=$?
+    if [ $_igrc = 124 ]; then
+      prog 100 fail "Wi-Fi 복구 명령이 끝나지 않아 자동 시도를 차단했습니다. Launch로 기록을 저장해 주세요."
+      return 0
+    fi
+  fi
   setup_hmgapi
   # 줄에 "[wireless-carplay-aa]"가 있어 단어 나누기 때 파일 이름 패턴으로 풀리지 않게
   set -f
@@ -2127,6 +2147,7 @@ has_bb() { [ "$BB_OK" = 1 ]; }
 
 main() {
   umask 077
+  [ -f "$APP/svc/ig-wifi-recovery.sh" ] && . "$APP/svc/ig-wifi-recovery.sh"
   if ! has_bb; then
     log "시작 안 함: busybox가 없음 ($BB, 실행 안 됨). 이 내비는 아직 지원하지 않음(조사 중)"
     idle_forever
@@ -2245,7 +2266,7 @@ main() {
   hint_tick
   # 설정이 끝난 차(재부팅 뒤 등)는 핫스팟이 켜지면 "준비됨". 설정 중이면 진행 기록은 fix_perms가 맡는다.
   # 이번 부팅에 "재부팅 필요"·"실패"를 이미 썼으면 덮어쓰지 않는다(재부팅해야 훅이 켜진다)
-  if setup_done && { [ ! -f $PROG ] || $BB grep -q '^state=done$' $PROG 2>/dev/null; }; then
+  if setup_done && running "hostapd $CONF" && our_dhcp_on && { [ ! -f $PROG ] || $BB grep -q '^state=done$' $PROG 2>/dev/null; }; then
     prog 100 done "무선 카플레이 준비됨. 아이폰을 연결해 보세요."
   fi
   # 1.7.2(P-7): 우리 핫스팟을 켠 뒤에 순정 AP 저장값을 맞춘다(settings가 몇 초 걸려도 핫스팟은 이미 켜져 있음)

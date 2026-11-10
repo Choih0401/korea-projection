@@ -123,7 +123,7 @@ logs() {
   # 1.7.2(P-15): ap.log는 크기 제한으로 ap.log.1에 앞부분이 있을 수 있다: 둘을 이어 마지막 400줄
   echo; echo "== ${APLOG##*/}"
   if [ -f $APLOG ]; then $BB cat $APLOG.1 $APLOG 2>/dev/null | lastmask 400; else echo "(없음)"; fi
-  for _f in $NOWLAN_LOG $NOCHIP_LOG $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
+  for _f in $NOWLAN_LOG $NOCHIP_LOG $W/ig-wifi-recovery.txt $W/ig-wifi-before.txt $W/ig-wifi-after.txt $BK/ig-wifi-recovery.state $W/map-car.txt $W/plan.txt $W/verify-map.txt $W/verify-map2.txt $W/mod-install.txt $W/mod-apply.txt $W/carreport.txt $W/app-install.log; do
     echo; echo "== ${_f##*/}"
     if [ -f $_f ]; then lastmask 400 < $_f; else echo "(없음)"; fi
   done
