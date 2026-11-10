@@ -1,7 +1,13 @@
+시험판: Korea Projection 1.7.2.1 / 무선 모드 2.4.1-k3-test.1
+이 ZIP은 Korea Projection이 자동으로 설치합니다. HMG-API에서 따로 설치하지 않습니다.
+기존 배포본과 모드 서명 키가 달라, 최초 교체는 기존 Korea Projection을 NEMESIS에서 삭제·인포 재부팅 후 전체 USB 묶음으로 설치합니다.
+시동 재개 후 실제 연결·안내 상태를 재확인하고 이전 TBT를 정리하는 코드가 들어 있습니다.
+시험·원복 안내: docs/k3-bdpe-tbt-resume-test.md
+
 이 폴더의 파일은 Korea Projection 자동 설정(svc/hotspot.sh의 setup_hmgapi)이 HMG-API에 넣습니다.
 
 - wireless-carplay-aa.zip: 한국 차 빌드
-  - HMG-API의 "Wireless CarPlay + Android Auto" 모드(VysseCodes, AGPL-3.0)를 바탕으로 한 한국 차 빌드 2.3.0입니다(Korea Projection 1.7.1). 확인된 한국 차의 지원 차 목록·패치 세트와, 한국 차용 코드 수정(계기판·HUD 회전 안내를 순정 한국 내비 번호로, 무선 안드로이드 오토, 무선 카플레이 곡 정보)이 들어 있습니다.
+  - HMG-API의 "Wireless CarPlay + Android Auto" 모드(VysseCodes, AGPL-3.0)를 바탕으로 한 한국 차 빌드 2.4.1-k3-test.1입니다(Korea Projection 시험판 1.7.2.1). 확인된 한국 차의 지원 차 목록·패치 세트와, 한국 차용 코드 수정(계기판·HUD 회전 안내를 순정 한국 내비 번호로, 무선 안드로이드 오토, 무선 카플레이 곡 정보)이 들어 있습니다.
   - 지금 들어 있는 차: 기아 니로 하이브리드(DEPEHEV.KOR 260902, 패치 세트 depehev), 현대 쏘나타 하이브리드 DN8(DN822HEV.KOR 260902, 패치 세트 dn822hev, 시험 지원), 현대 그랜저 하이브리드 IG(IGPEHEV.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원), 현대 벨로스터 N(JSN.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원), 현대 그랜저 2.5 IG PE(IGPE.KOR 260902, 패치 세트 dn822hev 같이 씀, 시험 지원)
   - 그 밖의 한국 차(Wi-Fi 칩이 있는 차)도 받습니다(자동 시험, 패치 세트 kor). 지도는 HMG-API가 그 차에서 만들고 확인합니다.
   - 대응 소스(AGPL-3.0): 코드(hooks.jar)의 소스는 포크 https://github.com/StopDragon/HMG-API 의 korea-build 브랜치(HMG-API v1.0.2에서 시작)에 있습니다. 우리가 바꾼 데이터(mod.json, patches.json, patches/)와 다시 만드는 방법은 공개 저장소 https://github.com/StopDragon/korea-projection 의 hmgapi-mod/ 폴더에 있습니다. 쏘나타 순정 체크섬은 차주 제보(HMG-API #91 Car Report)와 같습니다.

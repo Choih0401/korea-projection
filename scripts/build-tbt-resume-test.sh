@@ -57,6 +57,5 @@ rm -f "$Z"
 (cd "$W/package" && find . -type f | sort | TZ=UTC xargs touch -d 2026-01-01T00:00:00 && find . -type f | sort | zip -q -X -D "$Z" -@)
 unzip -t "$Z"
 sha256sum "$Z" "$W/package/hooks.jar" | sed "s|$W/package/hooks.jar|hooks.jar|" > "$OUT/SHA256SUMS"
-cp "$B/nemesis-pkg/korea.projection/hmgapi/wireless-carplay-aa.zip" "$OUT/wireless-carplay-aa-2.4.0-original.zip"
 cat "$OUT/SHA256SUMS"
 echo "Built $Z (development signature; remove the previous mod before installing)"

@@ -77,4 +77,4 @@ sh tools/mkmodpkg.sh mods/wireless-carplay-aa ~/my-mod.key
 
 ## K3 BD PE 시동 재개 TBT 잔상 시험 브랜치
 
-`fix/k3-bdpe-carplay-tbt-resume`의 수정은 [소스 패치](patches/0001-carplay-guidance-resume.patch)에 있습니다. 바탕 커밋은 `b02a1417c485ca8545293dc2b9230f1d3e0c11ec`이며, 원래 배포 ZIP을 변경하지 않고 별도 개발 키로 서명한 `2.4.1-k3-test.1`을 빌드합니다. 설치·원복·차량 시험·재빌드는 [시험 안내](../docs/k3-bdpe-tbt-resume-test.md)를 참고하세요. 실제 차량 검증 전인 시험판입니다.
+`fix/k3-bdpe-carplay-tbt-resume`의 수정은 [소스 패치](patches/0001-carplay-guidance-resume.patch)에 있습니다. 바탕 커밋은 `b02a1417c485ca8545293dc2b9230f1d3e0c11ec`이며, 별도 개발 키로 서명한 `2.4.1-k3-test.1`을 자동 설치하도록 Korea Projection 전체 USB 시험판 `1.7.2.1`에 포함합니다. 원래 APK·BusyBox를 유지하고 자동 설치용 버전·체크섬을 함께 반영했습니다. 설치·원복·차량 시험·재빌드는 [시험 안내](../docs/k3-bdpe-tbt-resume-test.md)를 참고하세요. 실제 차량 검증 전인 시험판입니다.

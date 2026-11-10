@@ -1333,9 +1333,9 @@ BK=${BK:-/data/nemesis/backup/korea.projection}
 PERMS_OURS=${PERMS_OURS:-$BK/perms.ours}
 MOD_ID=wireless-carplay-aa
 # 패키지에 든 모드 zip의 md5 (busybox 1.8.1에 sha256sum이 없다). zip을 바꾸면 함께 바꾼다.
-MOD_MD5=82b013c6b547dce0e958109b0d2eea98
+MOD_MD5=d33ec966a2a8291456728f3bc36b6a4c
 # 패키지에 든 모드의 버전(mod.json "version"). 1.5.7부터 차에 있는 우리 모드가 이것과 다르면 바꾼다(mod_update).
-MOD_VER=2.4.0
+MOD_VER=2.4.1-k3-test.1
 # 1.7.1: 토스트는 쓰지 않는다(CLAUDE.md 1장, 소유자 결정 2026-11-08: 너무 빨리 사라져 차에서 읽을 수 없다).
 # 안내는 ap.log("안내: …")와 상태 화면 앱이 읽는 알림 기록 $NOTICE(644, 비밀값 없음)에 남긴다.
 # 알림 기록은 한 줄에 "<시각(초)> <부팅 id> <문구>", 최근 NOTICE_KEEP줄만. 앱은 이번 부팅의 줄만 보인다.
